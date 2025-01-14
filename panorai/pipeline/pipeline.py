@@ -1,4 +1,6 @@
-from ..projection.projector import deg_to_rad
+from ..projection.projector import deg_to_rad, rad_to_deg
+import numpy as np
+
 import numpy as np
 from .pipeline_data import PipelineData
 from skimage.transform import resize
@@ -13,6 +15,7 @@ from joblib import Parallel, delayed
 from .utils.resizer import ResizerConfig
 from ..sampler import SamplerConfig
 from ..projection import ProjectorConfig
+from ..submodules.projections import ProjectionRegistry
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -76,7 +79,7 @@ class ProjectionPipeline:
     """
     def __init__(
         self,
-        projector_cfg: ProjectorConfig = None,
+        projection_name: str = None,
         pipeline_cfg: PipelineConfig = None,
         sampler_cfg: SamplerConfig = None,
     ):
@@ -87,12 +90,12 @@ class ProjectionPipeline:
         """
         # Default configurations
         self.sampler_cfg = sampler_cfg or SamplerConfig(sampler_cls="CubeSampler")
-        self.projector_cfg = projector_cfg or ProjectorConfig(dims=(1024, 1024), shadow_angle_deg=30, unsharp=False)
+        #self.projector_cfg = projector_cfg or ProjectorConfig(dims=(1024, 1024), shadow_angle_deg=30, unsharp=False)
         self.pipeline_cfg = pipeline_cfg or PipelineConfig(resize_factor=1.0)
 
         # Create sampler, projector, resizer
         self.sampler = self.sampler_cfg.create_sampler()
-        self.projector = self.projector_cfg.create_projector()
+        self.projector = ProjectionRegistry.get_projection(projection_name,return_processor=True)
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
 
         # Parallel setting
@@ -125,7 +128,7 @@ class ProjectionPipeline:
             raise TypeError("Data must be either PipelineData or np.ndarray.")
 
     # === Forward Projection ===
-    def project_with_sampler(self, data, fov=(1, 1)):
+    def project_with_sampler(self, data, **kwargs):
         """
         Forward projection on a single stacked array for all tangent points.
         Returns { "stacked": { "point_1": arr, ... } }
@@ -135,7 +138,7 @@ class ProjectionPipeline:
 
         tangent_points = self.sampler.get_tangent_points()
         prepared_data, _ = self._prepare_data(data)
-        
+        fov_deg = kwargs.get('fov_deg',90)
         # Store the shape so backward can override
         if isinstance(prepared_data, np.ndarray):
             self._stacked_shape = prepared_data.shape
@@ -143,13 +146,16 @@ class ProjectionPipeline:
             # Should not happen, but just in case
             self._stacked_shape = None
 
-        projections = {"stacked": {}}
+        projections = {"stacked": {}, "unstacked": {}}
         for idx, (lat_deg, lon_deg) in enumerate(tangent_points, start=1):
             lat = deg_to_rad(lat_deg)
             lon = deg_to_rad(lon_deg)
             logger.debug(f"Forward projecting for point {idx}, lat={lat_deg}, lon={lon_deg}.")
-            out_img = self.projector.forward(prepared_data, lat, lon, fov)
+            self.projector.config.update( phi1_deg=rad_to_deg(lat), lam0_deg=rad_to_deg(lon), fov_deg=fov_deg)
+            shadow_angle = kwargs.get('shadow_angle',0)
+            out_img = self.projector.forward(prepared_data,shadow_angle=shadow_angle)
             projections["stacked"][f"point_{idx}"] = out_img
+            
 
         return projections
 
@@ -166,7 +172,7 @@ class ProjectionPipeline:
         return out_img
 
     # === Backward Projection ===
-    def backward_with_sampler(self, rect_data, img_shape, fov=(1, 1)):
+    def backward_with_sampler(self, rect_data, img_shape, **kwargs):
         """
         If _stacked_shape is set from forward pass, override user-supplied `img_shape`
         to avoid shape mismatch. Then do the multi-channel backward pass, unstack if needed.
@@ -198,6 +204,10 @@ class ProjectionPipeline:
         if stacked_dict is None:
             raise ValueError("rect_data must have a 'stacked' key with tangent-point images.")
 
+        fov_deg = kwargs.get('fov_deg',90)
+        lon_points = img_shape[1]
+        lat_poonts = img_shape[0]
+
         tasks = []
         for idx, (lat_deg, lon_deg) in enumerate(tangent_points, start=1):
             rect_img = stacked_dict.get(f"point_{idx}")
@@ -213,9 +223,16 @@ class ProjectionPipeline:
 
         def _backward_task(idx, lat_deg, lon_deg, rect_img):
             logger.debug(f"[Parallel] Backward projecting point_{idx}, lat={lat_deg}, lon={lon_deg}...")
-            lat = deg_to_rad(lat_deg)
-            lon = deg_to_rad(lon_deg)
-            equirect_img, mask = self.projector.backward(rect_img, img_shape, lat, lon, fov, return_mask=True)
+
+            self.projector.config.update(
+                lon_points=lon_points,
+                lat_points=lat_poonts,
+                fov_deg=fov_deg,
+                phi1_deg=lat_deg,
+                lam0_deg=lon_deg,
+            )
+
+            equirect_img, mask = self.projector.backward(rect_img, return_mask=True)#, img_shape, lat, lon, fov_deg, return_mask=True)
             return idx, equirect_img, mask
 
         logger.info(f"Starting backward with n_jobs={self.n_jobs} on {len(tasks)} tasks.")
@@ -234,6 +251,13 @@ class ProjectionPipeline:
         # combined /= w[..., None]
 
         # If we had PipelineData, unstack
+        import matplotlib.pyplot as plt
+        plt.imshow(combined[:,:,0])
+        plt.show()
+        plt.imshow(combined[:,:,1:4])
+        plt.show()
+        plt.imshow(combined[:,:,4:])
+        plt.show()
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
             return new_data.as_dict()

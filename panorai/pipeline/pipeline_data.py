@@ -1,47 +1,5 @@
 import numpy as np
-
-class _PipelineData:
-    """
-    A container for paired data (e.g., RGB image, depth map, and additional arrays) for projection.
-    """
-    def __init__(self, rgb: np.ndarray, depth: np.ndarray = None, **kwargs):
-        """
-        Initialize PipelineData with RGB, optional depth map, and additional data arrays.
-
-        :param rgb: RGB image as a NumPy array.
-        :param depth: Depth map as a NumPy array (optional).
-        :param kwargs: Additional data as keyword arguments, where the key is the name of the data, and the value is the data array.
-        """
-        self.data = {"rgb": rgb / 255.0}  # Normalize RGB by default
-        if depth is not None:
-            self.data["depth"] = depth
-        self.data.update(kwargs)  # Add any additional data arrays
-
-    def as_dict(self):
-        """
-        Returns the data as a dictionary for projection processing.
-
-        :return: Dictionary with keys as data names and values as NumPy arrays.
-        """
-        return self.data
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        """
-        Create a PipelineData instance from a dictionary.
-
-        :param data: Dictionary with keys as data names and values as NumPy arrays.
-        :return: PipelineData instance.
-        """
-        if "rgb" not in data:
-            raise ValueError("The 'rgb' key is required in the dictionary to create PipelineData.")
-        rgb = data.pop("rgb")
-        depth = data.pop("depth", None)
-        return cls(rgb=rgb, depth=depth, **data)
-    
-
-import numpy as np
-
+from .utils import PreprocessEquirectangularImage
 class PipelineData:
     """
     A container for paired data (e.g., RGB image, depth map, and additional arrays) for projection.
@@ -130,6 +88,7 @@ class PipelineData:
         # We'll rely on the original shapes from self.data to see how many channels each had.
 
         start_c = 0
+        unstacked = {}
         for k in keys_order:
             orig = self.data[k]
             orig_shape = orig.shape  # e.g. (H, W), (H, W, 3), etc.
@@ -145,8 +104,10 @@ class PipelineData:
             # If the original was 2D, squeeze
             if orig.ndim == 2:
                 chunk = chunk[..., 0]  # remove that last dimension
-            self.data[k] = chunk
+            #self.data[k] = chunk
+            unstacked[k] = chunk
             start_c = end_c
+        return unstacked
 
     def unstack_new_instance(self, stacked_array, keys_order):
         """
@@ -175,3 +136,10 @@ class PipelineData:
         # We'll do a simple approach: if 'rgb' in new_data, that's for 'rgb'; 
         # if 'depth' in new_data, for 'depth'. The rest -> kwargs
         return PipelineData.from_dict(new_data)
+
+    def preprocess(self, shadow_angle=0, delta_lat=0, delta_lon=0):
+        new_data = {}
+        for k, v in self.data.items():
+            new_data[k] = PreprocessEquirectangularImage.preprocess(v, shadow_angle=shadow_angle, delta_lat=delta_lat, delta_lon=delta_lon)
+        self._cached_data = self.data.copy()
+        self.data = new_data
