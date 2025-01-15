@@ -1,7 +1,7 @@
 import cv2
-from ..projection.projector import ProjectorConfig
-from ..projection.projector import UnsharpMaskConfig
-from ..projection.projector import RemapConfig
+from ..projection_deprecated.projector import ProjectorConfig
+from ..projection_deprecated.projector import UnsharpMaskConfig
+from ..projection_deprecated.projector import RemapConfig
 from ..pipeline import ResizerConfig, ProjectionPipeline
 from ..sampler.sampler import SamplerConfig
 from ..pipeline import PipelineConfig

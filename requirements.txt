@@ -5,5 +5,7 @@ scikit-image
 opencv-python
 matplotlib
 pytest
+joblib
+pydantic
 # ...
 -e .

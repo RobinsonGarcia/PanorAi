@@ -10,9 +10,9 @@ from .common import PipelineFullConfig
 from .sampler.sampler import SamplerConfig, CubeSampler, IcosahedronSampler, FibonacciSampler
 
 # Import projection components
-from .projection.projector import ProjectorConfig, GnomonicProjector
-from .projection.utils.remapper import RemapConfig
-from .projection.utils.unsharp import UnsharpMaskConfig
+#from .projection_deprecated.projector import ProjectorConfig, GnomonicProjector
+#from .projection_deprecated.utils.remapper import RemapConfig
+#from .projection_deprecated.utils.unsharp import UnsharpMaskConfig
 
 # Define the public API for panorai
 __all__ = [
@@ -21,5 +21,5 @@ __all__ = [
     # Sampler
     "SamplerConfig", "CubeSampler", "IcosahedronSampler", "FibonacciSampler",
     # Projection
-    "ProjectorConfig", "GnomonicProjector", "RemapConfig", "UnsharpMaskConfig"
+    #"ProjectorConfig", "GnomonicProjector", "RemapConfig", "UnsharpMaskConfig"
 ]
