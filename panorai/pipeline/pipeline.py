@@ -13,9 +13,12 @@ import sys
 from joblib import Parallel, delayed
 
 from .utils.resizer import ResizerConfig
-from ..sampler import SamplerConfig
-from ..projection_deprecated import ProjectorConfig
+
+from ..sampler import SamplerRegistry
 from ..submodules.projections import ProjectionRegistry
+
+from ..projection_deprecated.projector import deg_to_rad
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -38,35 +41,6 @@ class PipelineConfig:
         self.resizer_cfg = resizer_cfg or ResizerConfig(resize_factor=resize_factor)
         self.n_jobs = n_jobs
 
-from ..projection_deprecated.projector import deg_to_rad
-import numpy as np
-from .pipeline_data import PipelineData
-from skimage.transform import resize
-import logging
-import os
-import sys
-
-# Parallel
-from joblib import Parallel, delayed
-from .utils.resizer import ResizerConfig
-from ..sampler import SamplerConfig
-from ..projection_deprecated import ProjectorConfig
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG if os.environ.get('DEBUG', 'False').lower() in ('true', '1') else logging.INFO)
-
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(logger.level)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-stream_handler.setFormatter(formatter)
-logger.handlers = [stream_handler]
-
-class PipelineConfig:
-    """Configuration for the pipeline."""
-    def __init__(self, resizer_cfg=None, resize_factor=1.0, n_jobs=1):
-        self.resizer_cfg = resizer_cfg or ResizerConfig(resize_factor=resize_factor)
-        self.n_jobs = n_jobs
-
 
 class ProjectionPipeline:
     """
@@ -80,8 +54,8 @@ class ProjectionPipeline:
     def __init__(
         self,
         projection_name: str = None,
+        sampler_name: str = None,
         pipeline_cfg: PipelineConfig = None,
-        sampler_cfg: SamplerConfig = None,
     ):
         """
         :param projector_cfg: Configuration for the projector (optional).
@@ -89,12 +63,10 @@ class ProjectionPipeline:
         :param sampler_cfg: SamplerConfig (optional).
         """
         # Default configurations
-        self.sampler_cfg = sampler_cfg or SamplerConfig(sampler_cls="CubeSampler")
-        #self.projector_cfg = projector_cfg or ProjectorConfig(dims=(1024, 1024), shadow_angle_deg=30, unsharp=False)
         self.pipeline_cfg = pipeline_cfg or PipelineConfig(resize_factor=1.0)
 
         # Create sampler, projector, resizer
-        self.sampler = self.sampler_cfg.create_sampler()
+        self.sampler = SamplerRegistry.get_sampler(sampler_name)
         self.projector = ProjectionRegistry.get_projection(projection_name, return_processor=True)
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
 
@@ -151,12 +123,11 @@ class ProjectionPipeline:
             lat = deg_to_rad(lat_deg)
             lon = deg_to_rad(lon_deg)
             logger.debug(f"Forward projecting for point {idx}, lat={lat_deg}, lon={lon_deg}.")
-            self.projector.config.update( phi1_deg=rad_to_deg(lat), lam0_deg=rad_to_deg(lon), fov_deg=fov_deg)
-            shadow_angle = kwargs.get('shadow_angle',0)
-            out_img = self.projector.forward(prepared_data,shadow_angle=shadow_angle)
+            self.projector.config.update(phi1_deg=rad_to_deg(lat), lam0_deg=rad_to_deg(lon), fov_deg=fov_deg)
+            shadow_angle = kwargs.get('shadow_angle', 0)
+            out_img = self.projector.forward(prepared_data, shadow_angle=shadow_angle)
             projections["stacked"][f"point_{idx}"] = out_img
             
-
         return projections
 
     def single_projection(self, data, lat_center, lon_center, fov=(1, 1)):
@@ -242,7 +213,10 @@ class ProjectionPipeline:
         logger.info("All backward tasks completed.")
 
         # Merge
+        import matplotlib.pyplot as plt
         for (idx, eq_img, mask) in results:
+            plt.imshow(eq_img[:,:,4:] )
+            plt.show()
             combined += eq_img * mask[..., None]
             weight_map += mask
 
@@ -256,7 +230,7 @@ class ProjectionPipeline:
         plt.show()
         plt.imshow(combined[:,:,1:4])
         plt.show()
-        plt.imshow(combined[:,:,])
+        plt.imshow(combined[:,:,4:])
         plt.show()
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)

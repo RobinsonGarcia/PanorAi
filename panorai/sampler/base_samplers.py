@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 
+
 class Sampler(ABC):
     """Abstract base class for sphere samplers."""
     @abstractmethod
@@ -9,6 +10,10 @@ class Sampler(ABC):
         Generate tangent points (latitude, longitude) on the sphere.
         """
         pass
+
+    def update(self, **kwargs):
+        """Update the sampler with new parameters."""
+        self.params.update(kwargs)
 
 
 class CubeSampler(Sampler):
@@ -19,6 +24,7 @@ class CubeSampler(Sampler):
 
         :param kwargs: Additional parameters (unused but accepted for compatibility).
         """
+        self.params = kwargs
         pass  # CubeSampler doesn't require specific parameters.
 
     def get_tangent_points(self):
@@ -43,13 +49,15 @@ class IcosahedronSampler(Sampler):
 
         :param kwargs: Additional parameters. Expected 'subdivisions' key for subdivisions.
         """
-        self.subdivisions = kwargs.get('subdivisions', 0)  # Default to 0 subdivisions.
-        self.vertices, self.faces = self._generate_icosahedron()
+        self.params = kwargs
+
 
     def _generate_icosahedron(self):
         """
         Generate vertices and faces of the icosahedron with subdivisions.
         """
+        subdivisions = self.params.get('subdivisions', 0)  # Default to 0 subdivisions.
+        
         phi = (1 + np.sqrt(5)) / 2  # Golden ratio
         verts = [
             [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
@@ -65,7 +73,7 @@ class IcosahedronSampler(Sampler):
             [5, 4, 9], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
         ]
 
-        for _ in range(self.subdivisions):
+        for _ in range(subdivisions):
             mid_cache = {}
             faces_subdiv = []
             for tri in faces:
@@ -112,7 +120,8 @@ class IcosahedronSampler(Sampler):
         """
         Compute tangent points from the face centers.
         """
-        face_centers = np.mean(self.vertices[np.array(self.faces)], axis=1)
+        vertices, faces = self._generate_icosahedron()
+        face_centers = np.mean(vertices[np.array(faces)], axis=1)
         return [self._cartesian_to_lat_lon(center) for center in face_centers]
 
     @staticmethod
@@ -134,15 +143,17 @@ class FibonacciSampler(Sampler):
 
         :param kwargs: Additional parameters. Expected 'n_points' key for number of points.
         """
-        self.n_points = kwargs.get('n_points', 10)  # Default to 10 points.
+        self.params = kwargs
+
 
     def get_tangent_points(self):
         """
         Generate tangent points using Fibonacci sphere sampling.
         """
+        n_points = self.params.get('n_points', 10) 
         indices = np.arange(0, self.n_points) + 0.5
         phi = 2 * np.pi * indices / ((1 + np.sqrt(5)) / 2)  # Golden angle
-        theta = np.arccos(1 - 2 * indices / self.n_points)  # Polar angle
+        theta = np.arccos(1 - 2 * indices / n_points)  # Polar angle
         x = np.sin(theta) * np.cos(phi)
         y = np.sin(theta) * np.sin(phi)
         z = np.cos(theta)
@@ -159,7 +170,6 @@ class FibonacciSampler(Sampler):
         return latitude, longitude
     
 
-
 SAMPLER_CLASSES = {
     "CubeSampler": CubeSampler,
     "IcosahedronSampler": IcosahedronSampler,
@@ -167,27 +177,3 @@ SAMPLER_CLASSES = {
     # Add other sampler classes here if needed
 }
 
-class SamplerConfig:
-    """Configuration for the sampler."""
-    def __init__(self, sampler_cls="CubeSampler", **sampler_kwargs):
-        """
-        Initialize sampler configuration.
-
-        :param sampler_cls: Sampler class to be instantiated (can be a string or class).
-        :param sampler_kwargs: Additional keyword arguments for the sampler.
-        """
-        if isinstance(sampler_cls, str):
-            if sampler_cls not in SAMPLER_CLASSES:
-                raise ValueError(f"Unknown sampler class name: {sampler_cls}")
-            self.sampler_cls = SAMPLER_CLASSES[sampler_cls]
-        else:
-            self.sampler_cls = sampler_cls
-        self.sampler_kwargs = sampler_kwargs
-
-    def create_sampler(self):
-        """
-        Instantiate and return the sampler based on configuration.
-
-        :return: Sampler instance.
-        """
-        return self.sampler_cls(**self.sampler_kwargs)

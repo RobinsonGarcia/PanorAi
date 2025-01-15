@@ -1,5 +1,11 @@
 # sampler/__init__.py
 
-from .sampler import SamplerConfig, CubeSampler, IcosahedronSampler, FibonacciSampler
+from .registry import SamplerRegistry
+from .default_samplers import register_default_samplers
 
-__all__ = ["SamplerConfig", "CubeSampler", "IcosahedronSampler", "FibonacciSampler"]
+try:
+    register_default_samplers()
+except:
+    raise "Cant register default samplers"
+
+__all__ = ["SamplerRegistry"]
