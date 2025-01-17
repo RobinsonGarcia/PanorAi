@@ -17,7 +17,7 @@ class PipelineData:
         if rgb is not None:
             # Ensure 3rd dim is 3 if it's truly RGB. Some code might pass (H, W). 
             # We'll assume shape is (H, W, 3).
-            self.data["rgb"] = rgb / 255.0  
+            self.data["rgb"] = rgb #/ 255.0  
         if depth is not None:
             # shape might be (H, W) or (H, W, 1)
             self.data["depth"] = depth
@@ -39,7 +39,7 @@ class PipelineData:
         """
         if "rgb" not in data:
             raise ValueError("The 'rgb' key is required to create PipelineData.")
-
+        data = data.copy()
         rgb = data.pop("rgb")
         depth = data.pop("depth", None)
 
