@@ -1,35 +1,18 @@
-# from ..projection_deprecated.projector import deg_to_rad, rad_to_deg
 import numpy as np
-from .pipeline_data import PipelineData
-# from skimage.transform import resize
-        
 import logging
 import os
 import sys
+import math
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-# For parallelization
 from joblib import Parallel, delayed
 
+from .pipeline_data import PipelineData
 from .utils.resizer import ResizerConfig
 
 from ..sampler import SamplerRegistry
+from ..sampler.base_samplers import Sampler  # For type hints
 from ..submodules.projections import ProjectionRegistry
-
-# from ..projection_deprecated.projector import deg_to_rad
-
-# Misc Functions
-import math
-
-
-def deg_to_rad(degrees: float) -> float:
-    """Convert degrees to radians."""
-    return degrees * math.pi / 180.0
-
-
-def rad_to_deg(radians: float) -> float:
-    """Convert radians to degrees."""
-    return radians * 180.0 / math.pi
-
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -42,29 +25,64 @@ stream_handler.setFormatter(formatter)
 logger.handlers = [stream_handler]  # Replace existing handlers
 
 
+def deg_to_rad(degrees: float) -> float:
+    """
+    Convert degrees to radians.
+
+    Args:
+        degrees (float): Angle in degrees.
+
+    Returns:
+        float: Angle in radians.
+    """
+    return degrees * math.pi / 180.0
+
+
+def rad_to_deg(radians: float) -> float:
+    """
+    Convert radians to degrees.
+
+    Args:
+        radians (float): Angle in radians.
+
+    Returns:
+        float: Angle in degrees.
+    """
+    return radians * 180.0 / math.pi
+
 
 class PipelineConfig:
-    """Configuration for the pipeline."""
-    def __init__(self, resizer_cfg=None, resize_factor=1.0, n_jobs=1):
+    """
+    Configuration class for the ProjectionPipeline.
+    """
+
+    def __init__(
+        self,
+        resizer_cfg: Optional[ResizerConfig] = None,
+        resize_factor: float = 1.0,
+        n_jobs: int = 1
+    ) -> None:
         """
         Initialize pipeline-level configuration.
 
-        :param resize_factor: Factor by which to resize input images before projection.
+        Args:
+            resizer_cfg (Optional[ResizerConfig]): Configuration for the image resizer.
+            resize_factor (float): Factor by which to resize input images before projection.
+            n_jobs (int): Number of parallel jobs to use.
         """
         self.resizer_cfg = resizer_cfg or ResizerConfig(resize_factor=resize_factor)
         self.n_jobs = n_jobs
 
-    def update(self, **kwargs):
+    def update(self, **kwargs: Any) -> None:
         """
         Update configuration using keyword arguments.
 
-        :param kwargs: Dictionary of attributes to update.
+        Args:
+            **kwargs (Any): Dictionary of attributes to update.
         """
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-            else:
-                continue
 
 
 class ProjectionPipeline:
@@ -72,57 +90,74 @@ class ProjectionPipeline:
     Manages sampling and projection strategies using modular configuration objects.
     Stacks all data channels into one multi-channel array for forward/backward operations,
     automatically un-stacks after backward if input was PipelineData.
-
-    Additionally, if stacking is used in forward pass, we override `img_shape` in 
-    backward pass to the actual stacked shape, preventing shape mismatches.
     """
+
     def __init__(
         self,
-        projection_name: str = None,
-        sampler_name: str = None,
-        pipeline_cfg: PipelineConfig = None,
-    ):
+        projection_name: str,
+        sampler_name: Optional[str] = None,
+        pipeline_cfg: Optional[PipelineConfig] = None,
+    ) -> None:
         """
-        :param projector_cfg: Configuration for the projector (optional).
-        :param pipeline_cfg: PipelineConfig (optional).
-        :param sampler_cfg: SamplerConfig (optional).
-        """
-        # Default configurations
-        self.pipeline_cfg = pipeline_cfg or PipelineConfig(resize_factor=1.0)
+        Initialize the ProjectionPipeline.
 
-        # Create sampler, projector, resizer
+        Args:
+            projection_name (str): Name of the projection to be used.
+            sampler_name (Optional[str]): Name of the sampler to be used. If None, pipeline only does single projections.
+            pipeline_cfg (Optional[PipelineConfig]): Pipeline configuration object.
+        """
         if projection_name is None:
             raise ValueError(
                 "A 'projection_name' must be specified when creating a ProjectionPipeline instance. "
-                f"These are the available options: {ProjectionRegistry.list_projections()}."
+                f"Available options: {ProjectionRegistry.list_projections()}."
             )
+
+        self.pipeline_cfg = pipeline_cfg or PipelineConfig(resize_factor=1.0)
         self.projection_name = projection_name
         self.sampler_name = sampler_name
-        self.sampler = SamplerRegistry.get_sampler(sampler_name) if self.sampler_name else None
+        self.sampler: Optional[Sampler] = None
+
+        if self.sampler_name:
+            # Retrieve the sampler instance
+            self.sampler = SamplerRegistry.get_sampler(sampler_name)
+
+        # Retrieve the projector
         self.projector = ProjectionRegistry.get_projection(projection_name, return_processor=True)
+        # Create the resizer
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
 
-        # Parallel setting
+        # Parallel jobs
         self.n_jobs = self.pipeline_cfg.n_jobs
 
-        # For un-stacking after backward:
-        self._original_data = None   # the PipelineData if used
-        self._keys_order = None      # list of data keys from stack_all
-        self._stacked_shape = None   # shape (H, W, total_channels) from forward pass
-    
+        # Internal references for un-stacking after backward
+        self._original_data: Optional[PipelineData] = None
+        self._keys_order: Optional[List[str]] = None
+        self._stacked_shape: Optional[Tuple[int, int, int]] = None
+
     @classmethod
-    def list_samplers(cls):
+    def list_samplers(cls) -> List[str]:
+        """
+        List all registered samplers.
+
+        Returns:
+            List[str]: Names of available samplers.
+        """
         return SamplerRegistry.list_samplers()
-    
+
     @classmethod
-    def list_projections(cls):
+    def list_projections(cls) -> List[str]:
+        """
+        List all registered projections.
+
+        Returns:
+            List[str]: Names of available projections.
+        """
         return ProjectionRegistry.list_projections()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         projection_config = self.projector.config.config_object.config.model_dump()
         sampler_config = self.sampler.params if self.sampler else {"default": "No sampler selected"}
 
-        # Formatting the projection and sampler configurations
         projection_config_str = "\n".join(f"{key}: {value}" for key, value in projection_config.items())
         sampler_config_str = (
             "\n".join(f"{key}: {value}" for key, value in sampler_config.items()) if sampler_config else "    No parameters"
@@ -137,30 +172,44 @@ class ProjectionPipeline:
 
 Note: You can pass any updates to these configurations via kwargs.
 """
-    
-    def update(self, **kwargs):
+
+    def update(self, **kwargs: Any) -> None:
+        """
+        Update the pipeline configuration, projector config, and sampler parameters.
+
+        Args:
+            **kwargs (Any): Arbitrary keyword arguments that override existing configurations.
+        """
         self.projector.config.update(**kwargs)
         if self.sampler:
             self.sampler.update(**kwargs)
         self.pipeline_cfg.update(**kwargs)
-        
-        # Resizer
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
-
-        # Parallel setting
         self.n_jobs = self.pipeline_cfg.n_jobs
-        pass
 
-    def _resize_image(self, img, upsample=True):
-        """Resize the input image using the ImageResizer."""
+    def _resize_image(self, img: np.ndarray, upsample: bool = True) -> np.ndarray:
+        """
+        Resize the input image using the ImageResizer.
+
+        Args:
+            img (np.ndarray): Input image.
+            upsample (bool): Whether to apply upsampling or not.
+
+        Returns:
+            np.ndarray: Resized image.
+        """
         return self.resizer.resize_image(img, upsample)
-    
-    def _prepare_data(self, data):
-        """
-        If data is PipelineData, call data.stack_all() => single (H, W, C), plus keys_order.
-        Store references so we can unstack automatically after backward.
-        """
 
+    def _prepare_data(self, data: Union[PipelineData, np.ndarray]) -> Tuple[np.ndarray, Optional[List[str]]]:
+        """
+        Prepare the data for processing. If it's PipelineData, stack all channels; if it's a NumPy array, use as is.
+
+        Args:
+            data (Union[PipelineData, np.ndarray]): The input data.
+
+        Returns:
+            Tuple[np.ndarray, Optional[List[str]]]: (stacked_array, keys_order_if_any).
+        """
         if isinstance(data, PipelineData):
             stacked, keys_order = data.stack_all()
             self._original_data = data
@@ -173,72 +222,121 @@ Note: You can pass any updates to these configurations via kwargs.
         else:
             raise TypeError("Data must be either PipelineData or np.ndarray.")
 
-    # === Forward Projection ===
-    def project_with_sampler(self, data, **kwargs):
+    def project_with_sampler(
+        self,
+        data: Union[PipelineData, np.ndarray],
+        **kwargs: Any
+    ) -> Dict[str, Any]:
         """
-        Forward projection on a single stacked array for all tangent points.
-        Returns { "stacked": { "point_1": arr, ... } }
+        Forward projection on a single stacked array for all tangent points (from the sampler).
+
+        Args:
+            data (Union[PipelineData, np.ndarray]): Input data for projection.
+            **kwargs (Any): Additional overrides for projector or sampler.
+
+        Returns:
+            Dict[str, Any]: Dictionary with key "stacked" containing tangent-point projections.
+                            If original data was PipelineData, also includes unstacked versions.
         """
         if not self.sampler:
-            raise ValueError("Sampler is not set.")
-        
+            raise ValueError("Sampler is not set. Provide 'sampler_name' or use single_projection().")
+
+        # Update pipeline with any additional kwargs
+        self.update(**kwargs)
+
         tangent_points = self.sampler.get_tangent_points()
         prepared_data, _ = self._prepare_data(data)
-        # Store the shape so backward can override
+
         if isinstance(prepared_data, np.ndarray):
             self._stacked_shape = prepared_data.shape
-        else:
-            # Should not happen, but just in case
-            self._stacked_shape = None
 
-        projections = {"stacked": {}}
+        projections: Dict[str, Any] = {"stacked": {}}
+
         for idx, (lat_deg, lon_deg) in enumerate(tangent_points, start=1):
             lat = deg_to_rad(lat_deg)
             lon = deg_to_rad(lon_deg)
             logger.debug(f"Forward projecting for point {idx}, lat={lat_deg}, lon={lon_deg}.")
+
+            # Update projector config for each tangent point
             self.projector.config.update(phi1_deg=rad_to_deg(lat), lam0_deg=rad_to_deg(lon))
-            # shadow_angle = kwargs.get('shadow_angle', 0)
+
             out_img = self.projector.forward(prepared_data)
             projections["stacked"][f"point_{idx}"] = out_img
+
             if self._original_data:
-                projections[f"point_{idx}"] = self._original_data.unstack_new_instance(out_img, self._keys_order).as_dict()
-            
+                # Also provide unstacked version
+                unstacked = self._original_data.unstack_new_instance(out_img, self._keys_order).as_dict()
+                projections[f"point_{idx}"] = unstacked
+
         return projections
 
-    def single_projection(self, data, **kwargs):
+    def single_projection(
+        self,
+        data: Union[PipelineData, np.ndarray],
+        **kwargs: Any
+    ) -> Union[np.ndarray, Dict[str, Any]]:
         """
-        Single forward projection of a stacked array.
+        Single forward projection without using a sampler.
+
+        Args:
+            data (Union[PipelineData, np.ndarray]): Input data for projection.
+            **kwargs (Any): Additional overrides for the projector config.
+
+        Returns:
+            Union[np.ndarray, Dict[str, Any]]: Projected image (stacked array), or if input was PipelineData,
+                                              a dict with both "stacked" and unstacked components.
         """
-        
+        self.update(**kwargs)
+
         prepared_data, _ = self._prepare_data(data)
         if isinstance(prepared_data, np.ndarray):
             self._stacked_shape = prepared_data.shape
+
         out_img = self.projector.forward(prepared_data)
+
         if self._original_data:
             unstacked = self._original_data.unstack_new_instance(out_img, self._keys_order)
             output = {'stacked': out_img}
             output.update(unstacked.as_dict())
             return output
         else:
-            return out_img   
-        
-    # === Backward Projection ===  
-    def backward_with_sampler(self, rect_data, img_shape=None, **kwargs):
+            return out_img
+
+    def backward_with_sampler(
+        self,
+        rect_data: Dict[str, Any],
+        img_shape: Optional[Tuple[int, int, int]] = None,
+        **kwargs: Any
+    ) -> Dict[str, np.ndarray]:
         """
         Handles backward projection and blends multiple equirectangular images into one
         using feathered blending to reduce visible edges.
-        """
-        if not self.sampler:
-            raise ValueError("Sampler is not set.")
 
-        # Override img_shape if forward shape is available
+        Args:
+            rect_data (Dict[str, Any]): Dictionary containing "stacked" key with tangent-point images.
+            img_shape (Optional[Tuple[int,int,int]]): Desired final shape. Overridden if pipeline had a forward pass.
+            **kwargs (Any): Additional overrides for the projector config.
+
+        Returns:
+            Dict[str, np.ndarray]: Dictionary with key "stacked" for the blended equirectangular output,
+                                   plus unstacked components if original data was used.
+        """
+        self.update(**kwargs)
+
+        if not self.sampler:
+            raise ValueError("Sampler is not set. Provide 'sampler_name' or use single_backward().")
+
+        # Override img_shape with the shape from the forward pass if available
         if self._stacked_shape is not None:
-            if img_shape != self._stacked_shape:
+            if img_shape is not None and img_shape != self._stacked_shape:
                 logger.warning(
                     f"Overriding user-supplied img_shape={img_shape} with stacked_shape={self._stacked_shape} "
                     "to ensure consistent channel dimensions."
                 )
             img_shape = self._stacked_shape
+
+        if img_shape is None:
+            raise ValueError("img_shape must be provided if no prior forward shape is available.")
 
         tangent_points = self.sampler.get_tangent_points()
         combined = np.zeros(img_shape, dtype=np.float32)
@@ -248,11 +346,11 @@ Note: You can pass any updates to these configurations via kwargs.
         if stacked_dict is None:
             raise ValueError("rect_data must have a 'stacked' key with tangent-point images.")
 
-        if self._stacked_shape is not None:
-            self.projector.config.update(
-                lon_points=img_shape[1],
-                lat_points=img_shape[0]
-            )
+        # Update projector config for final shape
+        self.projector.config.update(
+            lon_points=img_shape[1],
+            lat_points=img_shape[0]
+        )
 
         tasks = []
         for idx, (lat_deg, lon_deg) in enumerate(tangent_points, start=1):
@@ -262,20 +360,28 @@ Note: You can pass any updates to these configurations via kwargs.
 
             if rect_img.shape[-1] != img_shape[-1]:
                 raise ValueError(
-                    f"rect_img has {rect_img.shape[-1]} channels, but final shape indicates {img_shape[-1]} channels.\n"
-                    "Make sure the shapes match."
+                    f"rect_img for point_{idx} has {rect_img.shape[-1]} channels, "
+                    f"but final shape indicates {img_shape[-1]} channels. Check your data."
                 )
+
             tasks.append((idx, lat_deg, lon_deg, rect_img))
 
-        def _backward_task(idx, lat_deg, lon_deg, rect_img):
-            logger.debug(f"[Parallel] Backward projecting point_{idx}, lat={lat_deg}, lon={lon_deg}...")
+        def _backward_task(
+            idx: int,
+            lat_deg_: float,
+            lon_deg_: float,
+            rect_img_: np.ndarray
+        ) -> Tuple[int, np.ndarray, np.ndarray]:
+            """
+            Worker function for parallel backward projection.
+            """
+            logger.debug(f"[Parallel] Backward projecting point_{idx}, lat={lat_deg_}, lon={lon_deg_}...")
 
             self.projector.config.update(
-                phi1_deg=lat_deg,
-                lam0_deg=lon_deg,
+                phi1_deg=lat_deg_,
+                lam0_deg=lon_deg_,
             )
-
-            equirect_img, mask = self.projector.backward(rect_img, return_mask=True)
+            equirect_img, mask = self.projector.backward(rect_img_, return_mask=True)
             return idx, equirect_img, mask
 
         logger.info(f"Starting backward with n_jobs={self.n_jobs} on {len(tasks)} tasks.")
@@ -284,41 +390,47 @@ Note: You can pass any updates to these configurations via kwargs.
         )
         logger.info("All backward tasks completed.")
 
-        # Blending logic with feathering
+        # Feathered blending
+        from scipy.ndimage import distance_transform_edt
         for (idx, eq_img, mask) in results:
-            # Calculate valid mask (feathering at the edges)
             valid_mask = np.max(eq_img > 0, axis=-1).astype(np.float32)
-
-            # Feather the mask based on distance from the edges
-            from scipy.ndimage import distance_transform_edt
             distance = distance_transform_edt(valid_mask)
-            feathered_mask = distance / distance.max()  # Normalize to [0, 1]
+            feathered_mask = distance / distance.max() if distance.max() != 0 else valid_mask
 
-            # Accumulate contributions with feathered weights
             combined += eq_img * feathered_mask[..., None]
             weight_map += feathered_mask
 
-        # Normalize the combined image
+        # Normalize
         valid_weights = weight_map > 0
         combined[valid_weights] /= weight_map[valid_weights, None]
-
-        # Ensure zero weights are explicitly set to zero
         combined[~valid_weights] = 0
 
-        # Unstack if original data was used
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
-            output = {"stacked": combined}
+            output: Dict[str, Any] = {"stacked": combined}
             output.update(new_data.as_dict())
             return output
         else:
             return {"stacked": combined}
 
-    def single_backward(self, rect_data, img_shape=None, **kwargs):
+    def single_backward(
+        self,
+        rect_data: Union[np.ndarray, Dict[str, Any]],
+        img_shape: Optional[Tuple[int, int, int]] = None,
+        **kwargs: Any
+    ) -> Union[np.ndarray, Dict[str, Any]]:
         """
-        If we have self._stacked_shape, override user-supplied shape for channel consistency.
-        If pipeline data was used, unstack automatically.
+        Perform a single backward projection without sampler-based blending.
+
+        Args:
+            rect_data (Union[np.ndarray, Dict[str, Any]]): Either a NumPy array or a dict with a 'stacked' key.
+            img_shape (Optional[Tuple[int,int,int]]): Shape for the output (overridden if pipeline had a forward pass).
+            **kwargs (Any): Additional overrides for the projector config.
+
+        Returns:
+            Union[np.ndarray, Dict[str, Any]]: Backprojected image (stacked array), or dict with unstacked components if original data was used.
         """
+        self.update(**kwargs)
 
         if self._stacked_shape is not None and img_shape != self._stacked_shape:
             logger.warning(
@@ -327,41 +439,72 @@ Note: You can pass any updates to these configurations via kwargs.
             )
             img_shape = self._stacked_shape
 
+        # If rect_data is directly a NumPy array
         if isinstance(rect_data, np.ndarray):
             out_img, _ = self.projector.backward(rect_data, return_mask=True)
-            if self._original_data is not None and self._keys_order is not None:
+            if self._original_data and self._keys_order:
                 new_data = self._original_data.unstack_new_instance(out_img, self._keys_order)
                 return new_data.as_dict()
             else:
                 return out_img
+
+        # If rect_data is a dictionary
+        stacked_arr = rect_data.get("stacked")
+        if stacked_arr is None:
+            raise ValueError("Expecting key 'stacked' in rect_data for single_backward.")
+
+        if img_shape and stacked_arr.shape[-1] != img_shape[-1]:
+            raise ValueError(
+                f"Stacked array has {stacked_arr.shape[-1]} channels, but final shape indicates {img_shape[-1]} channels."
+            )
+
+        out_img, _ = self.projector.backward(stacked_arr, return_mask=True)
+        if self._original_data and self._keys_order:
+            new_data = self._original_data.unstack_new_instance(out_img, self._keys_order)
+            return new_data.as_dict()
         else:
-            # Must have "stacked" key
-            stacked_arr = rect_data.get("stacked")
-            if stacked_arr is None:
-                raise ValueError("Expecting key 'stacked' in rect_data for single_backward.")
+            return out_img
 
-            if stacked_arr.shape[-1] != img_shape[-1]:
-                raise ValueError(
-                    f"Stacked array has {stacked_arr.shape[-1]} channels, but final shape indicates {img_shape[-1]}.\n"
-                    "Shapes must match."
-                )
-            out_img, _ = self.projector.backward(stacked_arr, return_mask=True)
-            if self._original_data is not None and self._keys_order is not None:
-                new_data = self._original_data.unstack_new_instance(out_img, self._keys_order)
-                return new_data.as_dict()
-            else:
-                return out_img
+    def project(self, data: Union[PipelineData, np.ndarray], **kwargs: Any) -> Dict[str, Any]:
+        """
+        Top-level forward projection interface. Chooses sampler-based or single projection.
 
-    def project(self, data, **kwargs):
-        self.update(**kwargs)
+        Args:
+            data (Union[PipelineData, np.ndarray]): Input data for projection.
+            **kwargs (Any): Additional overrides.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing projection results.
+        """
         if self.sampler:
             return self.project_with_sampler(data, **kwargs)
         else:
-            return self.single_projection(data, **kwargs)
-            
-    def backward(self, data, img_shape=None, **kwargs):
-        self.update(**kwargs)
+            out = self.single_projection(data, **kwargs)
+            if isinstance(out, dict):
+                return out
+            return {"stacked": out}
+
+    def backward(
+        self,
+        data: Union[Dict[str, Any], np.ndarray],
+        img_shape: Optional[Tuple[int, int, int]] = None,
+        **kwargs: Any
+    ) -> Dict[str, Any]:
+        """
+        Top-level backward projection interface. Chooses sampler-based or single backward approach.
+
+        Args:
+            data (Union[Dict[str, Any], np.ndarray]): Equirectangular or rectified input data.
+            img_shape (Optional[Tuple[int,int,int]]): Desired output shape (overridden if pipeline had a forward pass).
+            **kwargs (Any): Additional overrides.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing backward projection (blended) results.
+        """
         if self.sampler:
-            return self.backward_with_sampler(data, img_shape, **kwargs)
+            return self.backward_with_sampler(data, img_shape=img_shape, **kwargs)
         else:
-            return self.single_backward(data, img_shape, **kwargs)
+            out = self.single_backward(data, img_shape=img_shape, **kwargs)
+            if isinstance(out, dict):
+                return out
+            return {"stacked": out}

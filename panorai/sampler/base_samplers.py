@@ -1,62 +1,88 @@
 from abc import ABC, abstractmethod
 import numpy as np
+from typing import List, Tuple, Dict, Any
 
 
 class Sampler(ABC):
     """Abstract base class for sphere samplers."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        """
+        Base sampler initialization.
+
+        Args:
+            **kwargs (Any): Additional parameters for sampler configuration.
+        """
+        self.params: Dict[str, Any] = kwargs
+
     @abstractmethod
-    def get_tangent_points(self):
+    def get_tangent_points(self) -> List[Tuple[float, float]]:
         """
         Generate tangent points (latitude, longitude) on the sphere.
+
+        Returns:
+            List[Tuple[float, float]]: A list of (latitude_deg, longitude_deg) pairs.
         """
         pass
 
-    def update(self, **kwargs):
-        """Update the sampler with new parameters."""
+    def update(self, **kwargs: Any) -> None:
+        """
+        Update the sampler with new parameters.
+
+        Args:
+            **kwargs (Any): Key-value pairs to update the existing parameters.
+        """
         self.params.update(kwargs)
-        
+
+
 class CubeSampler(Sampler):
     """Generates tangent points for a cube-based projection."""
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         """
-        Initialize the CubeSampler with optional parameters from kwargs.
+        Initialize the CubeSampler with optional parameters.
 
-        :param kwargs: Additional parameters (unused but accepted for compatibility).
+        Args:
+            **kwargs (Any): Additional parameters (unused).
         """
-        self.params = kwargs
-        pass  # CubeSampler doesn't require specific parameters.
+        super().__init__(**kwargs)
 
-    def get_tangent_points(self):
+    def get_tangent_points(self) -> List[Tuple[float, float]]:
         """
         Returns tangent points for cube faces (latitude, longitude).
+
+        Returns:
+            List[Tuple[float, float]]: A fixed list of 6 (lat, lon) pairs for cube projection.
         """
         return [
-            (0, 0),     # Front
-            (0, 90),    # Right
-            (0, 180),   # Back
-            (0, -90),   # Left
-            (90, 0),    # Top
-            (-90, 0)    # Bottom
+            (0, 0),      # Front
+            (0, 90),     # Right
+            (0, 180),    # Back
+            (0, -90),    # Left
+            (90, 0),     # Top
+            (-90, 0)     # Bottom
         ]
 
 
 class IcosahedronSampler(Sampler):
     """Generates tangent points for an icosahedron-based projection."""
-    def __init__(self, **kwargs):
-        """
-        Initialize the IcosahedronSampler with parameters from kwargs.
 
-        :param kwargs: Additional parameters. Expected 'subdivisions' key for subdivisions.
+    def __init__(self, **kwargs: Any) -> None:
         """
-        self.params = kwargs
+        Initialize the IcosahedronSampler.
 
+        Args:
+            **kwargs (Any): Additional parameters. Expects 'subdivisions' for controlling detail level.
+        """
+        super().__init__(**kwargs)
 
     def _generate_icosahedron(self):
         """
-        Generate vertices and faces of the icosahedron with subdivisions.
+        Generate vertices and faces of the icosahedron with optional subdivisions.
+
+        Returns:
+            (np.ndarray, List[List[int]]): A tuple of (vertices, faces).
         """
         subdivisions = self.params.get('subdivisions', 0)  # Default to 0 subdivisions.
-        
         phi = (1 + np.sqrt(5)) / 2  # Golden ratio
         verts = [
             [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
@@ -90,17 +116,34 @@ class IcosahedronSampler(Sampler):
         return np.array(verts), faces
 
     @staticmethod
-    def _normalize_vertex(x, y, z):
+    def _normalize_vertex(x: float, y: float, z: float) -> List[float]:
         """
         Normalize a vertex to the unit sphere.
+
+        Args:
+            x (float): X-coordinate.
+            y (float): Y-coordinate.
+            z (float): Z-coordinate.
+
+        Returns:
+            List[float]: Normalized (x, y, z).
         """
         length = np.sqrt(x**2 + y**2 + z**2)
         return [i / length for i in (x, y, z)]
 
-    @staticmethod
-    def _midpoint(verts, cache, p1, p2):
+    @classmethod
+    def _midpoint(cls, verts: list, cache: dict, p1: int, p2: int) -> int:
         """
         Find or create the midpoint between two vertices.
+
+        Args:
+            verts (list): List of vertex coordinates.
+            cache (dict): A dictionary for caching midpoints.
+            p1 (int): Index of the first vertex.
+            p2 (int): Index of the second vertex.
+
+        Returns:
+            int: Index of the midpoint vertex.
         """
         smaller, larger = sorted([p1, p2])
         key = (smaller, larger)
@@ -110,23 +153,32 @@ class IcosahedronSampler(Sampler):
         v1 = verts[p1]
         v2 = verts[p2]
         mid = [(v1[i] + v2[i]) / 2 for i in range(3)]
-        mid_normalized = IcosahedronSampler._normalize_vertex(*mid)
+        mid_normalized = cls._normalize_vertex(*mid)
         verts.append(mid_normalized)
         cache[key] = len(verts) - 1
         return cache[key]
 
-    def get_tangent_points(self):
+    def get_tangent_points(self) -> List[Tuple[float, float]]:
         """
         Compute tangent points from the face centers.
+
+        Returns:
+            List[Tuple[float, float]]: A list of (latitude_deg, longitude_deg) pairs.
         """
         vertices, faces = self._generate_icosahedron()
         face_centers = np.mean(vertices[np.array(faces)], axis=1)
         return [self._cartesian_to_lat_lon(center) for center in face_centers]
 
     @staticmethod
-    def _cartesian_to_lat_lon(cartesian):
+    def _cartesian_to_lat_lon(cartesian: np.ndarray) -> Tuple[float, float]:
         """
-        Convert Cartesian coordinates to latitude and longitude.
+        Convert Cartesian coordinates to latitude and longitude in degrees.
+
+        Args:
+            cartesian (np.ndarray): (x, y, z) array.
+
+        Returns:
+            (float, float): (latitude_deg, longitude_deg).
         """
         x, y, z = cartesian
         latitude = np.degrees(np.arcsin(z))
@@ -136,43 +188,54 @@ class IcosahedronSampler(Sampler):
 
 class FibonacciSampler(Sampler):
     """Generates tangent points using the Fibonacci sphere method."""
-    def __init__(self, **kwargs):
+
+    def __init__(self, **kwargs: Any) -> None:
         """
-        Initialize the FibonacciSampler with parameters from kwargs.
+        Initialize the FibonacciSampler with optional parameters.
 
-        :param kwargs: Additional parameters. Expected 'n_points' key for number of points.
+        Args:
+            **kwargs (Any): Expects 'n_points' key for the number of points on the sphere.
         """
-        self.params = kwargs
+        super().__init__(**kwargs)
 
-
-    def get_tangent_points(self):
+    def get_tangent_points(self) -> List[Tuple[float, float]]:
         """
         Generate tangent points using Fibonacci sphere sampling.
+
+        Returns:
+            List[Tuple[float, float]]: A list of (latitude_deg, longitude_deg) pairs.
         """
-        n_points = self.params.get('n_points', 10) 
-        indices = np.arange(0, self.n_points) + 0.5
-        phi = 2 * np.pi * indices / ((1 + np.sqrt(5)) / 2)  # Golden angle
-        theta = np.arccos(1 - 2 * indices / n_points)  # Polar angle
-        x = np.sin(theta) * np.cos(phi)
-        y = np.sin(theta) * np.sin(phi)
+        n_points = self.params.get('n_points', 10)  # Fixed to use self.params
+        indices = np.arange(0, n_points) + 0.5
+        phi = (1 + np.sqrt(5)) / 2  # Golden ratio
+        theta = np.arccos(1 - 2 * indices / n_points)  # polar angle
+        angle = 2 * np.pi * indices / phi
+
+        x = np.sin(theta) * np.cos(angle)
+        y = np.sin(theta) * np.sin(angle)
         z = np.cos(theta)
+
         return [self._cartesian_to_lat_lon((x[i], y[i], z[i])) for i in range(len(x))]
 
     @staticmethod
-    def _cartesian_to_lat_lon(cartesian):
+    def _cartesian_to_lat_lon(cartesian: Tuple[float, float, float]) -> Tuple[float, float]:
         """
-        Convert Cartesian coordinates to latitude and longitude.
+        Convert Cartesian coordinates to latitude and longitude in degrees.
+
+        Args:
+            cartesian (Tuple[float, float, float]): (x, y, z) coordinates.
+
+        Returns:
+            (float, float): (latitude_deg, longitude_deg).
         """
         x, y, z = cartesian
         latitude = np.degrees(np.arcsin(z))
         longitude = np.degrees(np.arctan2(y, x))
         return latitude, longitude
-    
+
 
 SAMPLER_CLASSES = {
     "CubeSampler": CubeSampler,
     "IcosahedronSampler": IcosahedronSampler,
     "FibonacciSampler": FibonacciSampler,
-    # Add other sampler classes here if needed
 }
-

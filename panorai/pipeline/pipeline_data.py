@@ -1,67 +1,80 @@
 import numpy as np
+from typing import Dict, List, Tuple, Union, Optional
+
 from .utils import PreprocessEquirectangularImage
+
+
 class PipelineData:
     """
     A container for paired data (e.g., RGB image, depth map, and additional arrays) for projection.
     """
-    def __init__(self, rgb: np.ndarray, depth: np.ndarray = None, **kwargs):
+
+    def __init__(self, rgb: np.ndarray, depth: Optional[np.ndarray] = None, **kwargs: np.ndarray) -> None:
         """
         Initialize PipelineData with RGB, optional depth, and additional data arrays.
 
-        :param rgb: RGB image as a NumPy array (H, W, 3) typically in [0..255].
-        :param depth: Depth map as a NumPy array (H, W) or (H, W, 1).
-        :param kwargs: Additional data arrays, e.g., "xyz_depth" -> (H, W, 3).
-        """
-        # Normalize RGB by default to [0..1].
-        self.data = {}
-        if rgb is not None:
-            # Ensure 3rd dim is 3 if it's truly RGB. Some code might pass (H, W). 
-            # We'll assume shape is (H, W, 3).
-            self.data["rgb"] = rgb #/ 255.0  
-        if depth is not None:
-            # shape might be (H, W) or (H, W, 1)
-            self.data["depth"] = depth
-        # Add any additional data arrays
-        self.data.update(kwargs)
+        Args:
+            rgb (np.ndarray): RGB image as a NumPy array (H, W, 3).
+            depth (Optional[np.ndarray]): Depth map as a NumPy array (H, W) or (H, W, 1).
+            **kwargs (np.ndarray): Additional data arrays, e.g. "xyz_depth" -> (H, W, 3).
 
-    def as_dict(self):
-        """Return a dictionary of all stored arrays."""
+        Notes:
+            You can store arbitrary data arrays, but each must share the same (H, W) dimensions.
+        """
+        self.data: Dict[str, np.ndarray] = {}
+
+        if rgb is not None:
+            self.data["rgb"] = rgb
+        if depth is not None:
+            self.data["depth"] = depth
+
+        # Add any additional data arrays
+        for k, v in kwargs.items():
+            self.data[k] = v
+
+    def as_dict(self) -> Dict[str, np.ndarray]:
+        """
+        Return a dictionary of all stored arrays.
+
+        Returns:
+            Dict[str, np.ndarray]: A dictionary of data arrays by name.
+        """
         return self.data
 
     @classmethod
-    def from_dict(cls, data: dict):
+    def from_dict(cls, data: Dict[str, np.ndarray]) -> "PipelineData":
         """
         Create a PipelineData instance from a dictionary.
 
-        :param data: Dictionary with keys as data names and values as NumPy arrays.
-                     Must contain at least "rgb" or handle the case if missing.
-        :return: PipelineData instance.
+        Args:
+            data (Dict[str, np.ndarray]): Dictionary with keys as data names and values as NumPy arrays.
+                                          Must contain at least "rgb" or handle the case if missing.
+
+        Returns:
+            PipelineData: A new PipelineData instance.
+
+        Raises:
+            ValueError: If 'rgb' is not found in the data.
         """
         if "rgb" not in data:
             raise ValueError("The 'rgb' key is required to create PipelineData.")
-        data = data.copy()
-        rgb = data.pop("rgb")
-        depth = data.pop("depth", None)
 
-        return cls(rgb=rgb, depth=depth, **data)
+        data_copy = data.copy()
+        rgb = data_copy.pop("rgb")
+        depth = data_copy.pop("depth", None)
+        return cls(rgb=rgb, depth=depth, **data_copy)
 
-    def stack_all(self):
+    def stack_all(self) -> Tuple[np.ndarray, List[str]]:
         """
         Stacks all channels into a single multi-channel array along the last dimension.
         Returns (H, W, total_channels).
 
-        We assume:
-          - 'rgb' is (H, W, 3)
-          - 'depth' is (H, W) or (H, W, 1)
-          - any additional keys, e.g. 'xyz_depth' is (H, W, 3)
+        Returns:
+            (np.ndarray, List[str]): A tuple of (stacked_array, keys_order).
         """
-        # Sort keys if you want a consistent channel ordering 
-        # (e.g., always stack in [rgb -> depth -> xyz_depth] order).
-        # For simplicity, let's gather them in alphabetical order or define your own.
-        # We'll do a stable sort by key:
         sorted_keys = sorted(self.data.keys())
-
         stacked_list = []
+
         for k in sorted_keys:
             arr = self.data[k]
             if arr.ndim == 2:
@@ -69,52 +82,48 @@ class PipelineData:
                 arr = arr[..., np.newaxis]
             stacked_list.append(arr)
 
-        # Now we can np.concatenate along channels
         stacked = np.concatenate(stacked_list, axis=-1)
         return stacked, sorted_keys
 
-    def unstack_all(self, stacked_array, keys_order):
+    def unstack_all(self, stacked_array: np.ndarray, keys_order: List[str]) -> Dict[str, np.ndarray]:
         """
-        Unstacks a single multi-channel array back into separate entries in self.data.
+        Unstacks a single multi-channel array back into separate entries.
 
-        :param stacked_array: (H, W, total_channels)
-        :param keys_order: the list of keys that was used in stack_all (sorted_keys).
-        :return: None (updates self.data in-place).
+        Args:
+            stacked_array (np.ndarray): (H, W, total_channels)
+            keys_order (List[str]): The list of keys that was used in stack_all().
+
+        Returns:
+            Dict[str, np.ndarray]: A dictionary of unstacked arrays keyed by the original keys.
         """
-        # We need to split the channels back in the same proportions as before.
-        # We'll figure out each shape from the original arrays in self.data.
-
-        # But note: after a forward/backward pass, shape might remain the same (H, W, C).
-        # We'll rely on the original shapes from self.data to see how many channels each had.
-
-        start_c = 0
         unstacked = {}
+        start_c = 0
         for k in keys_order:
             orig = self.data[k]
-            orig_shape = orig.shape  # e.g. (H, W), (H, W, 3), etc.
             if orig.ndim == 2:
                 num_c = 1
             else:
-                num_c = orig_shape[-1]
+                num_c = orig.shape[-1]
 
-            # Extract the slice
             end_c = start_c + num_c
             chunk = stacked_array[..., start_c:end_c]
-
-            # If the original was 2D, squeeze
             if orig.ndim == 2:
-                chunk = chunk[..., 0]  # remove that last dimension
-            #self.data[k] = chunk
+                chunk = chunk[..., 0]
             unstacked[k] = chunk
             start_c = end_c
         return unstacked
 
-    def unstack_new_instance(self, stacked_array, keys_order):
+    def unstack_new_instance(self, stacked_array: np.ndarray, keys_order: List[str]) -> "PipelineData":
         """
-        Optionally create a new PipelineData instance with data splitted from stacked_array.
-        Sometimes we don't want to mutate self.data in place.
+        Create a new PipelineData instance with data split from stacked_array.
+
+        Args:
+            stacked_array (np.ndarray): (H, W, total_channels)
+            keys_order (List[str]): The list of keys that was used in stack_all().
+
+        Returns:
+            PipelineData: A new instance with unstacked data.
         """
-        # We'll create a new dictionary
         new_data = {}
         start_c = 0
         for k in keys_order:
@@ -131,15 +140,24 @@ class PipelineData:
             new_data[k] = chunk
             start_c = end_c
 
-        # Then build a new PipelineData from the dictionary
-        # we have to pass them properly (rgb, depth, or kwargs)
-        # We'll do a simple approach: if 'rgb' in new_data, that's for 'rgb'; 
-        # if 'depth' in new_data, for 'depth'. The rest -> kwargs
         return PipelineData.from_dict(new_data)
 
-    def preprocess(self, shadow_angle=0, delta_lat=0, delta_lon=0):
+    def preprocess(self, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0) -> None:
+        """
+        Optionally preprocess each stored array by extending and/or rotating the equirectangular image.
+
+        Args:
+            shadow_angle (float): Additional field of view in degrees to extend. Default is 0.
+            delta_lat (float): Latitude rotation in degrees. Default is 0.
+            delta_lon (float): Longitude rotation in degrees. Default is 0.
+        """
         new_data = {}
         for k, v in self.data.items():
-            new_data[k] = PreprocessEquirectangularImage.preprocess(v, shadow_angle=shadow_angle, delta_lat=delta_lat, delta_lon=delta_lon)
+            new_data[k] = PreprocessEquirectangularImage.preprocess(
+                v,
+                shadow_angle=shadow_angle,
+                delta_lat=delta_lat,
+                delta_lon=delta_lon
+            )
         self._cached_data = self.data.copy()
         self.data = new_data

@@ -1,18 +1,22 @@
-# /Users/robinsongarcia/projects/gnomonic/projection/default_projections.py
+# panorai/sampler/default_samplers.py
 
-from .registry import SamplerRegistry
-
-from .base_samplers import SAMPLER_CLASSES
 import logging
+from .registry import SamplerRegistry
+from .base_samplers import SAMPLER_CLASSES
 
-# Initialize logger for this module
 logger = logging.getLogger('sampler.default_samplers')
 
 
-def register_default_samplers():
+def register_default_samplers() -> None:
+    """
+    Registers default sampler classes into the SamplerRegistry.
 
+    Raises:
+        Exception: If sampler registration fails for any reason.
+    """
     logger.debug("Registering default samplers.")
     for k, v in SAMPLER_CLASSES.items():
-        SamplerRegistry.register(k, v())
-    
+        # Instantiate and register the default instance
+        sampler_instance = v()
+        SamplerRegistry.register(k, sampler_instance)
     logger.debug("All default samplers registered.")

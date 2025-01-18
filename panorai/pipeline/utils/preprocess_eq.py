@@ -1,31 +1,34 @@
 import cv2
 import numpy as np
 import logging
-
+from typing import Tuple
 
 class PreprocessEquirectangularImage:
-    # Set up the logger for the class
+    """
+    Provides methods for extending and rotating equirectangular images (360° panoramas).
+    """
+
     logger = logging.getLogger("EquirectangularImage")
     logger.setLevel(logging.DEBUG)
 
     @classmethod
-    def extend_height(cls, image, shadow_angle):
+    def extend_height(cls, image: np.ndarray, shadow_angle: float) -> np.ndarray:
         """
         Extends the height of an equirectangular image based on the given additional FOV.
 
-        Parameters:
+        Args:
             image (np.ndarray): Input equirectangular image.
             shadow_angle (float): Additional field of view in degrees to extend vertically.
 
         Returns:
-            extended_image (np.ndarray): Image with extended bottom region.
-            h_prime (int): Number of rows added to the original image.
+            np.ndarray: Image with extended bottom region.
         """
         cls.logger.info("Starting height extension with shadow_angle=%.2f", shadow_angle)
 
         if not isinstance(image, np.ndarray):
             cls.logger.error("Image is not a valid numpy array.")
             raise TypeError("Image must be a numpy array.")
+
         if shadow_angle <= 0:
             cls.logger.info("No extension needed as shadow_angle=0 or less.")
             return image  # No extension needed
@@ -35,8 +38,10 @@ class PreprocessEquirectangularImage:
         if len(image.shape) == 2:
             height, width = image.shape
             channels = 1
+            image = image[..., np.newaxis]
         else:
             height, width, channels = image.shape
+
         h_prime = int((shadow_angle / fov_original) * height)
         cls.logger.debug("Original height: %d, Additional height: %d", height, h_prime)
 
@@ -47,12 +52,11 @@ class PreprocessEquirectangularImage:
         return extended_image
 
     @classmethod
-    def undo_extend_height(cls, extended_image, shadow_angle):
+    def undo_extend_height(cls, extended_image: np.ndarray, shadow_angle: float) -> np.ndarray:
         """
-        Removes the extra bottom rows that were added by 'extend_height', 
-        computed from the same shadow_angle that was used to extend the image.
+        Removes the extra bottom rows that were added by 'extend_height'.
 
-        Parameters:
+        Args:
             extended_image (np.ndarray): The extended equirectangular image.
             shadow_angle (float): Additional field of view in degrees that was used to extend.
 
@@ -65,28 +69,18 @@ class PreprocessEquirectangularImage:
             cls.logger.error("Image is not a valid numpy array.")
             raise TypeError("extended_image must be a numpy array.")
 
-        shadow_angle = np.abs(shadow_angle)
-
-        # We need to reverse the logic used in extend_height.
-        # In extend_height, new_height = original_height + h_prime,
-        # where h_prime = int((shadow_angle / 180.0) * original_height).
-        # Thus extended_height = original_height + h_prime
-        # => original_height ≈ extended_height / (1 + shadow_angle/180.0).
-        
+        shadow_angle = abs(shadow_angle)
         fov_original = 180.0
-        ext_height, ext_width, ext_channels = extended_image.shape
-        
-        # Estimate the original height (may be off-by-one due to integer rounding)
+
+        ext_height, ext_width = extended_image.shape[:2]
         estimated_original_height = int(
             round(ext_height / (1.0 + shadow_angle / fov_original))
         )
-        
-        # h_prime is then the difference
         h_prime_est = ext_height - estimated_original_height
 
         cls.logger.debug(
-            "Extended image height: %d, Estimated original height: %d, "
-            "Estimated h_prime: %d", ext_height, estimated_original_height, h_prime_est
+            "Extended image height: %d, Estimated original height: %d, Estimated h_prime: %d",
+            ext_height, estimated_original_height, h_prime_est
         )
 
         if h_prime_est <= 0:
@@ -96,20 +90,21 @@ class PreprocessEquirectangularImage:
             )
             return extended_image
 
-        # Slice the image to remove the bottom h_prime_est rows
         restored_image = extended_image[:estimated_original_height, :, :]
-
-        cls.logger.info(
-            "Extended rows removed. New height: %d", restored_image.shape[0]
-        )
+        cls.logger.info("Extended rows removed. New height: %d", restored_image.shape[0])
         return restored_image
 
     @classmethod
-    def rotate(cls, image, delta_lat, delta_lon):
+    def rotate(
+        cls,
+        image: np.ndarray,
+        delta_lat: float,
+        delta_lon: float
+    ) -> np.ndarray:
         """
         Rotates an equirectangular image based on latitude (delta_lat) and longitude (delta_lon) shifts.
 
-        Parameters:
+        Args:
             image (np.ndarray): Input equirectangular image.
             delta_lat (float): Latitude rotation in degrees.
             delta_lon (float): Longitude rotation in degrees.
@@ -118,10 +113,11 @@ class PreprocessEquirectangularImage:
             np.ndarray: Rotated equirectangular image.
         """
         cls.logger.info("Starting rotation with delta_lat=%.2f, delta_lon=%.2f", delta_lat, delta_lon)
-     
+
         if len(image.shape) == 2:
             H, W = image.shape
             C = 1
+            image = image[..., np.newaxis]
         else:
             H, W, C = image.shape
         cls.logger.debug("Image dimensions: Height=%d, Width=%d, Channels=%d", H, W, C)
@@ -176,49 +172,50 @@ class PreprocessEquirectangularImage:
         return rotated_image
 
     @classmethod
-    def preprocess(cls, image, **kwargs):
+    def preprocess(
+        cls,
+        image: np.ndarray,
+        shadow_angle: float = 0,
+        delta_lat: float = 0,
+        delta_lon: float = 0
+    ) -> np.ndarray:
         """
         Preprocess an equirectangular image by optionally extending its height and then rotating it.
 
-        Parameters:
+        Args:
             image (np.ndarray): Input equirectangular image.
-            **kwargs: Parameters for preprocessing:
-                - shadow_angle (float): Additional field of view in degrees to extend. Default is 0.
-                - delta_lat (float): Latitude rotation in degrees. Default is 0.
-                - delta_lon (float): Longitude rotation in degrees. Default is 0.
+            shadow_angle (float, optional): Additional field of view in degrees to extend. Default is 0.
+            delta_lat (float, optional): Latitude rotation in degrees. Default is 0.
+            delta_lon (float, optional): Longitude rotation in degrees. Default is 0.
 
         Returns:
-            processed_image (np.ndarray): Preprocessed (extended + rotated) image.
-            h_prime (int): Number of rows added during extension.
+            np.ndarray: The preprocessed (extended + rotated) image.
         """
-        shadow_angle = kwargs.get("shadow_angle", 0)
-        delta_lat = kwargs.get("delta_lat", 0)
-        delta_lon = kwargs.get("delta_lon", 0)
-
         cls.logger.info(
             "Starting preprocessing with parameters: shadow_angle=%.2f, delta_lat=%.2f, delta_lon=%.2f",
             shadow_angle, delta_lat, delta_lon
         )
 
-        # Step 1: Extend the image height
-        processed_image = cls.extend_height(image, shadow_angle) if shadow_angle >= 0 else cls.undo_extend_height(image, shadow_angle)
-        
+        # Step 1: Extend or undo extend height
+        if shadow_angle >= 0:
+            processed_image = cls.extend_height(image, shadow_angle)
+        else:
+            processed_image = cls.undo_extend_height(image, shadow_angle)
+
         # Step 2: Rotate the image
         processed_image = cls.rotate(processed_image, delta_lat, delta_lon)
-        if len(processed_image.shape)==2:
-            processed_image = processed_image[:, :, None]
-
         cls.logger.info("Preprocessing complete.")
+
         return processed_image
 
     @classmethod
-    def save_image(cls, image, file_path):
+    def save_image(cls, image: np.ndarray, file_path: str) -> None:
         """
-        Saves the current image to the specified file path.
+        Save the given image to the specified file path.
 
-        Parameters:
+        Args:
             image (np.ndarray): Image to save.
-            file_path (str): Path to which the image should be saved.
+            file_path (str): Output path.
         """
         if not isinstance(image, np.ndarray):
             cls.logger.error("Image is not a valid numpy array.")
