@@ -9,43 +9,67 @@ with open(os.path.join(this_directory, "README.md"), encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="panorai",  # Adjust if you prefer another package name
-    version="0.1.0",  # Update or automate versioning as needed
-    author="RLSGarcia",
+    name="panorai",  # Package name
+    version="0.1.0",  # Semantic versioning
+    author="Robinson Luiz Souza Garcia",
     author_email="rlsgarcia@icloud.com",
     description="A Python package for panoramic image projection and blending using Gnomonic (and other) projections.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/RobinsonGarcia/PanorAi",  
-    packages=find_packages(exclude=["tests*", "docs*"]),  # Adjust as needed
+    packages=find_packages(exclude=["tests*", "docs*", "examples*"]),  # Adjust exclusions as needed
     classifiers=[
+        "Development Status :: 3 - Alpha",  # Update based on project maturity
+        "Intended Audience :: Developers",
+        "Topic :: Scientific/Engineering :: Image Processing",
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",  # or another license
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.7",  # Specify the minimum Python version
     install_requires=[
         "numpy",
-        "opencv-python",
+        "opencv-python-headless",  # Use headless if no GUI is needed
         "scikit-image",
         "scipy",
         "joblib",
         "pydantic>=2.0.0",
-        # Add or remove dependencies based on your project's requirements
     ],
     extras_require={
         "dev": [
             "pytest",
             "pytest-cov",
-            # any additional dev/test tools
-        ]
+            "flake8",  # Linter
+            "black",  # Code formatter
+            "mypy",  # Type checker
+        ],
+        "docs": [
+            "sphinx",
+            "sphinx-rtd-theme",
+        ],
     },
     entry_points={
-        # Example: If you provide console scripts, declare them here.
-        # "console_scripts": [
-        #     "panorai-cli=panorai.cli:main",
-        # ],
+        "console_scripts": [
+            "panorai-cli=panorai.cli.projection_pipeline_cli:main",
+        ],
     },
-    include_package_data=True,  # If your package includes non-Python files
+    include_package_data=True,  # Includes non-code files specified in MANIFEST.in
     license="MIT",  # Or whichever license you use
+    project_urls={
+        "Bug Tracker": "https://github.com/RobinsonGarcia/PanorAi/issues",
+        "Source Code": "https://github.com/RobinsonGarcia/PanorAi",
+        "Documentation": "https://github.com/RobinsonGarcia/PanorAi/wiki",  # Adjust if you have docs
+    },
+    keywords=[
+        "panorama",
+        "image processing",
+        "projection",
+        "gnomonic",
+        "computer vision",
+    ],
 )

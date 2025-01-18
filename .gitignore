@@ -2,10 +2,10 @@ face_pair_test
 images
 prompts
 src
+output
 main.ipynb
 panorai/deprecated
 panotai/readme
-README.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
