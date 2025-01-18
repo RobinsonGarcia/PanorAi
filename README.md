@@ -1,4 +1,3 @@
-~~~markdown
 # Panorai
 
 **Panorai** is a Python package for spherical (360°) image processing, specifically focusing on sampling, projection, forward/backward transformations, and unsharp masking for panoramic or spherical data. It provides a modular pipeline to handle various steps, including:
@@ -333,5 +332,5 @@ For questions or feedback, contact the maintainers:
 ---
 
 Enjoy using Panorai for your panoramic image processing!
-~~~
+
 
