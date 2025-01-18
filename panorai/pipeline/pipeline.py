@@ -30,6 +30,7 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 stream_handler.setFormatter(formatter)
 logger.handlers = [stream_handler]  # Replace existing handlers
 
+
 class PipelineConfig:
     """Configuration for the pipeline."""
     def __init__(self, resizer_cfg=None, resize_factor=1.0, n_jobs=1):
@@ -40,6 +41,18 @@ class PipelineConfig:
         """
         self.resizer_cfg = resizer_cfg or ResizerConfig(resize_factor=resize_factor)
         self.n_jobs = n_jobs
+
+    def update(self, **kwargs):
+        """
+        Update configuration using keyword arguments.
+
+        :param kwargs: Dictionary of attributes to update.
+        """
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                continue
 
 
 class ProjectionPipeline:
@@ -72,7 +85,7 @@ class ProjectionPipeline:
                 f"These are the available options: {ProjectionRegistry.list_projections()}."
             )
         self.projection_name = projection_name
-        self.sampler_name = sampler_name 
+        self.sampler_name = sampler_name
         self.sampler = SamplerRegistry.get_sampler(sampler_name) if self.sampler_name else None
         self.projector = ProjectionRegistry.get_projection(projection_name, return_processor=True)
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
@@ -112,6 +125,18 @@ class ProjectionPipeline:
 
 Note: You can pass any updates to these configurations via kwargs.
 """
+    
+    def update(self, **kwargs):
+        self.projector.config.update(**kwargs)
+        self.sampler.update(**kwargs)
+        self.pipeline_cfg.update(**kwargs)
+        
+        # Resizer
+        self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
+
+        # Parallel setting
+        self.n_jobs = self.pipeline_cfg.n_jobs
+        pass
 
     def _resize_image(self, img, upsample=True):
         """Resize the input image using the ImageResizer."""
@@ -144,8 +169,6 @@ Note: You can pass any updates to these configurations via kwargs.
         if not self.sampler:
             raise ValueError("Sampler is not set.")
         
-        self.projector.config.update(**kwargs)
-
         tangent_points = self.sampler.get_tangent_points()
         prepared_data, _ = self._prepare_data(data)
         # Store the shape so backward can override
@@ -173,7 +196,6 @@ Note: You can pass any updates to these configurations via kwargs.
         """
         Single forward projection of a stacked array.
         """
-        self.projector.config.update(**kwargs)
         
         prepared_data, _ = self._prepare_data(data)
         if isinstance(prepared_data, np.ndarray):
@@ -187,26 +209,16 @@ Note: You can pass any updates to these configurations via kwargs.
         else:
             return out_img   
         
-    # === Backward Projection ===
+    # === Backward Projection ===  
     def backward_with_sampler(self, rect_data, img_shape=None, **kwargs):
         """
-        print('NNN')
-        If _stacked_shape is set from forward pass, override user-supplied `img_shape`
-        to avoid shape mismatch. Then do the multi-channel backward pass, unstack if needed.
-
-        :param rect_data: { "stacked": { "point_1": arr, ... } }
-        :param img_shape: Potentially (H, W, 3) from user, but if we stacked 7 channels,
-                        we override with (H, W, 7).
-        :return: 
-        If PipelineData was used, returns unstacked dict of { "rgb": arr, "depth": arr, ... }
-        If user input was a raw array, returns { "stacked": combined }
+        Handles backward projection and blends multiple equirectangular images into one
+        using feathered blending to reduce visible edges.
         """
         if not self.sampler:
             raise ValueError("Sampler is not set.")
-        
-        self.projector.config.update(**kwargs)
 
-        # If we have a stacked_shape from forward, override
+        # Override img_shape if forward shape is available
         if self._stacked_shape is not None:
             if img_shape != self._stacked_shape:
                 logger.warning(
@@ -259,19 +271,28 @@ Note: You can pass any updates to these configurations via kwargs.
         )
         logger.info("All backward tasks completed.")
 
-        # Merge
+        # Blending logic with feathering
         for (idx, eq_img, mask) in results:
-            combined += eq_img * mask[..., None]
-            weight_map += mask
+            # Calculate valid mask (feathering at the edges)
+            valid_mask = np.max(eq_img > 0, axis=-1).astype(np.float32)
 
-        # Normalize combined image by valid weights
+            # Feather the mask based on distance from the edges
+            from scipy.ndimage import distance_transform_edt
+            distance = distance_transform_edt(valid_mask)
+            feathered_mask = distance / distance.max()  # Normalize to [0, 1]
+
+            # Accumulate contributions with feathered weights
+            combined += eq_img * feathered_mask[..., None]
+            weight_map += feathered_mask
+
+        # Normalize the combined image
         valid_weights = weight_map > 0
         combined[valid_weights] /= weight_map[valid_weights, None]
 
-        # Fill regions with zero weight to avoid NaNs
+        # Ensure zero weights are explicitly set to zero
         combined[~valid_weights] = 0
 
-        # If we had PipelineData, unstack
+        # Unstack if original data was used
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
             output = {"stacked": combined}
@@ -280,6 +301,9 @@ Note: You can pass any updates to these configurations via kwargs.
         else:
             return {"stacked": combined}
 
+
+
+
     def _backward_with_sampler(self, rect_data, img_shape=None, **kwargs):
         """
         If _stacked_shape is set from forward pass, override user-supplied `img_shape`
@@ -287,16 +311,14 @@ Note: You can pass any updates to these configurations via kwargs.
 
         :param rect_data: { "stacked": { "point_1": arr, ... } }
         :param img_shape: Potentially (H, W, 3) from user, but if we stacked 7 channels,
-                          we override with (H, W, 7).
+                        we override with (H, W, 7).
         :return: 
-          If PipelineData was used, returns unstacked dict of { "rgb": arr, "depth": arr, ... }
-          If user input was a raw array, returns { "stacked": combined }
+        If PipelineData was used, returns unstacked dict of { "rgb": arr, "depth": arr, ... }
+        If user input was a raw array, returns { "stacked": combined }
         """
         if not self.sampler:
             raise ValueError("Sampler is not set.")
         
-        self.projector.config.update(**kwargs)
-
         # If we have a stacked_shape from forward, override
         if self._stacked_shape is not None:
             if img_shape != self._stacked_shape:
@@ -308,7 +330,8 @@ Note: You can pass any updates to these configurations via kwargs.
 
         tangent_points = self.sampler.get_tangent_points()
         combined = np.zeros(img_shape, dtype=np.float32)
-        weight_map = np.zeros(img_shape[:2], dtype=np.float32)
+        #weight_map = np.zeros(img_shape[:2], dtype=np.float32)
+        weight_map = np.zeros(img_shape, dtype=np.float32)
 
         stacked_dict = rect_data.get("stacked")
         if stacked_dict is None:
@@ -341,26 +364,37 @@ Note: You can pass any updates to these configurations via kwargs.
                 lam0_deg=lon_deg,
             )
 
-            equirect_img, mask = self.projector.backward(rect_img, return_mask=True)#, img_shape, lat, lon, fov_deg, return_mask=True)
+            equirect_img, mask = self.projector.backward(rect_img, return_mask=True)
             return idx, equirect_img, mask
 
         logger.info(f"Starting backward with n_jobs={self.n_jobs} on {len(tasks)} tasks.")
-        results = Parallel(n_jobs=self.n_jobs)(
+        results = Parallel( n_jobs=self.n_jobs)(
             delayed(_backward_task)(*task) for task in tasks
         )
         logger.info("All backward tasks completed.")
 
         # Merge
+        import matplotlib.pyplot as plt
         for (idx, eq_img, mask) in results:
-            combined += eq_img * mask[..., None]
-            weight_map += mask
+            
+            new_data = self._original_data.unstack_new_instance(eq_img, self._keys_order).as_dict()
+            plt.imshow(new_data['rgb'].astype(np.uint8))
+            plt.show()
+            #_mask = np.max((eq_img * mask[:, :, None] > 0), axis=-1) * 1.
 
-        # Optionally blend
-        w = weight_map #np.maximum(weight_map, 1e-9)
-        combined /= w[..., None]
+            _mask = (eq_img  > 0) #* 1.
+
+            combined[_mask] += eq_img[_mask] #* _mask #_mask[..., None]
+            
+            weight_map[_mask] += 1
+        # Normalize combined image by valid weights
+        valid_weights = weight_map > 0
+        combined[valid_weights] /= weight_map[valid_weights]#, None]
+
+        # Fill regions with zero weight to avoid NaNs
+        # combined[~valid_weights] = 0
 
         # If we had PipelineData, unstack
-
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
             output = {"stacked": combined}
@@ -374,9 +408,6 @@ Note: You can pass any updates to these configurations via kwargs.
         If we have self._stacked_shape, override user-supplied shape for channel consistency.
         If pipeline data was used, unstack automatically.
         """
-        self.projector.config.update(**kwargs)
-
-        self.projector.config.update(**kwargs)
 
         if self._stacked_shape is not None and img_shape != self._stacked_shape:
             logger.warning(
@@ -411,12 +442,14 @@ Note: You can pass any updates to these configurations via kwargs.
                 return out_img
 
     def project(self, data, **kwargs):
+        self.update(**kwargs)
         if self.sampler:
             return self.project_with_sampler(data, **kwargs)
         else:
             return self.single_projection(data, **kwargs)
             
     def backward(self, data, img_shape=None, **kwargs):
+        self.update(**kwargs)
         if self.sampler:
             return self.backward_with_sampler(data, img_shape, **kwargs)
         else:
