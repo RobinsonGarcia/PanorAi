@@ -34,6 +34,7 @@ This README will guide you through the repository structure, installation, usage
 
 ## Directory Structure
 
+```markdown
 /
 ├── panorai/
 │   ├── __pycache__/
@@ -81,6 +82,7 @@ This README will guide you through the repository structure, installation, usage
 ├── requirements.txt
 ├── setup.py
 └── test_results.db
+```
 
 ### Notable Contents
 
