@@ -120,7 +120,7 @@ class ProjectionPipeline:
 
     def __repr__(self):
         projection_config = self.projector.config.config_object.config.model_dump()
-        sampler_config = self.sampler.params
+        sampler_config = self.sampler.params if self.sampler else {"default": "No sampler selected"}
 
         # Formatting the projection and sampler configurations
         projection_config_str = "\n".join(f"{key}: {value}" for key, value in projection_config.items())
@@ -140,7 +140,8 @@ Note: You can pass any updates to these configurations via kwargs.
     
     def update(self, **kwargs):
         self.projector.config.update(**kwargs)
-        self.sampler.update(**kwargs)
+        if self.sampler:
+            self.sampler.update(**kwargs)
         self.pipeline_cfg.update(**kwargs)
         
         # Resizer

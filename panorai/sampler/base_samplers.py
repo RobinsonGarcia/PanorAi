@@ -14,8 +14,7 @@ class Sampler(ABC):
     def update(self, **kwargs):
         """Update the sampler with new parameters."""
         self.params.update(kwargs)
-
-
+        
 class CubeSampler(Sampler):
     """Generates tangent points for a cube-based projection."""
     def __init__(self, **kwargs):
