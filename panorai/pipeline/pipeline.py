@@ -190,6 +190,98 @@ Note: You can pass any updates to these configurations via kwargs.
     # === Backward Projection ===
     def backward_with_sampler(self, rect_data, img_shape=None, **kwargs):
         """
+        print('NNN')
+        If _stacked_shape is set from forward pass, override user-supplied `img_shape`
+        to avoid shape mismatch. Then do the multi-channel backward pass, unstack if needed.
+
+        :param rect_data: { "stacked": { "point_1": arr, ... } }
+        :param img_shape: Potentially (H, W, 3) from user, but if we stacked 7 channels,
+                        we override with (H, W, 7).
+        :return: 
+        If PipelineData was used, returns unstacked dict of { "rgb": arr, "depth": arr, ... }
+        If user input was a raw array, returns { "stacked": combined }
+        """
+        if not self.sampler:
+            raise ValueError("Sampler is not set.")
+        
+        self.projector.config.update(**kwargs)
+
+        # If we have a stacked_shape from forward, override
+        if self._stacked_shape is not None:
+            if img_shape != self._stacked_shape:
+                logger.warning(
+                    f"Overriding user-supplied img_shape={img_shape} with stacked_shape={self._stacked_shape} "
+                    "to ensure consistent channel dimensions."
+                )
+            img_shape = self._stacked_shape
+
+        tangent_points = self.sampler.get_tangent_points()
+        combined = np.zeros(img_shape, dtype=np.float32)
+        weight_map = np.zeros(img_shape[:2], dtype=np.float32)
+
+        stacked_dict = rect_data.get("stacked")
+        if stacked_dict is None:
+            raise ValueError("rect_data must have a 'stacked' key with tangent-point images.")
+
+        if self._stacked_shape is not None:
+            self.projector.config.update(
+                lon_points=img_shape[1],
+                lat_points=img_shape[0]
+            )
+
+        tasks = []
+        for idx, (lat_deg, lon_deg) in enumerate(tangent_points, start=1):
+            rect_img = stacked_dict.get(f"point_{idx}")
+            if rect_img is None:
+                raise ValueError(f"Missing 'point_{idx}' in rect_data['stacked'].")
+
+            if rect_img.shape[-1] != img_shape[-1]:
+                raise ValueError(
+                    f"rect_img has {rect_img.shape[-1]} channels, but final shape indicates {img_shape[-1]} channels.\n"
+                    "Make sure the shapes match."
+                )
+            tasks.append((idx, lat_deg, lon_deg, rect_img))
+
+        def _backward_task(idx, lat_deg, lon_deg, rect_img):
+            logger.debug(f"[Parallel] Backward projecting point_{idx}, lat={lat_deg}, lon={lon_deg}...")
+
+            self.projector.config.update(
+                phi1_deg=lat_deg,
+                lam0_deg=lon_deg,
+            )
+
+            equirect_img, mask = self.projector.backward(rect_img, return_mask=True)
+            return idx, equirect_img, mask
+
+        logger.info(f"Starting backward with n_jobs={self.n_jobs} on {len(tasks)} tasks.")
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(_backward_task)(*task) for task in tasks
+        )
+        logger.info("All backward tasks completed.")
+
+        # Merge
+        for (idx, eq_img, mask) in results:
+            combined += eq_img * mask[..., None]
+            weight_map += mask
+
+        # Normalize combined image by valid weights
+        valid_weights = weight_map > 0
+        combined[valid_weights] /= weight_map[valid_weights, None]
+
+        # Fill regions with zero weight to avoid NaNs
+        combined[~valid_weights] = 0
+
+        # If we had PipelineData, unstack
+        if self._original_data is not None and self._keys_order is not None:
+            new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
+            output = {"stacked": combined}
+            output.update(new_data.as_dict())
+            return output
+        else:
+            return {"stacked": combined}
+
+    def _backward_with_sampler(self, rect_data, img_shape=None, **kwargs):
+        """
         If _stacked_shape is set from forward pass, override user-supplied `img_shape`
         to avoid shape mismatch. Then do the multi-channel backward pass, unstack if needed.
 
@@ -264,7 +356,7 @@ Note: You can pass any updates to these configurations via kwargs.
             weight_map += mask
 
         # Optionally blend
-        w = np.maximum(weight_map, 1e-9)
+        w = weight_map #np.maximum(weight_map, 1e-9)
         combined /= w[..., None]
 
         # If we had PipelineData, unstack
