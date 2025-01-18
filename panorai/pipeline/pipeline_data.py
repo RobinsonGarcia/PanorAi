@@ -31,6 +31,10 @@ class PipelineData:
         # Add any additional data arrays
         for k, v in kwargs.items():
             self.data[k] = v
+        
+        for k, v in self.data.items():
+            self.H, self.W = v.shape[:2]
+            break
 
     def as_dict(self) -> Dict[str, np.ndarray]:
         """

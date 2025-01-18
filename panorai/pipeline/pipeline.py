@@ -476,6 +476,17 @@ Note: You can pass any updates to these configurations via kwargs.
         Returns:
             Dict[str, Any]: A dictionary containing projection results.
         """
+        if isinstance(data, PipelineData):
+            img_shape = data.H, data.W
+        elif isinstance(data, np.ndarray):
+            img_shape = data.shape[:2]
+        else:
+            raise Exception("Input data must be an instance of PipelineData or a Numpy Array")
+        
+        shape = {'lon_points': img_shape[0], 'lat_points': img_shape[1]}
+        logger.debug(f"Updating x_points and y_points to {shape}.")
+        self.update(**shape)
+       
         if self.sampler:
             return self.project_with_sampler(data, **kwargs)
         else:
