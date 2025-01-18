@@ -88,26 +88,17 @@ This README will guide you through the repository structure, installation, usage
 
 - **panorai/**  
   Main package directory containing submodules:
-  - **common/**: Shared utilities and a `PipelineFullConfig` that ties together projector, sampler, etc.  
+  
   - **pipeline/**: The pipeline logic for forward/backward projection and data handling, plus utility functions like `resizer`.  
   - **projection/**: Projector classes (e.g., `GnomonicProjector`) and remapping/unsharp utility code.  
   - **sampler/**: Sphere sampling strategies (cube, icosahedron, Fibonacci).  
   - **readme/**: Additional notes/documentation (e.g., gnomonic.md).  
-
-- **tests/**  
-  Contains the `test_config_params.py` which uses `pytest` to run parameterized tests of the pipeline.
 
 - **setup.py**  
   A setuptools-based installation script.
 
 - **requirements.txt**  
   Lists dependencies needed to run the code (e.g., NumPy, OpenCV, etc.).
-
-- **best_configs_chart.png**  
-  Automatically generated chart of the best configurations by MSE after running tests.
-
-- **test_results.db**  
-  A SQLite database file storing test results and configuration MSEs.
 
 ---
 
@@ -265,48 +256,19 @@ plt.show()
 1. **PipelineData**  
    A container for storing and stacking multiple image channels (e.g., `rgb`, `depth`).
 
-2. **PipelineFullConfig**  
-   A unified configuration class collecting all relevant sub-configurations (Projector, Sampler, Remapper, etc.).
 
-3. **ProjectionPipeline**  
+2. **ProjectionPipeline**  
    Manages the forward/backward transformations using a chosen sampler and projector.
 
-4. **ProjectorConfig & GnomonicProjector**  
-   Defines how spherical coordinates map to 2D planes and vice versa. Gnomonic projection is the main reference implementation.
 
-5. **Samplers**  
+3. **Samplers**  
    - CubeSampler: Tangent points for cube-based projections.
    - IcosahedronSampler: Icosahedron-based tangent points.
    - FibonacciSampler: Fibonacci sphere sampling for uniform distribution.
 
-6. **ResizerConfig, ImageResizer**  
-   Utility for resizing images, can use cv2 or skimage methods.
-
-7. **UnsharpMaskConfig, UnsharpMasker**  
-   Adds unsharp masking (sharpening) to the rectilinear projection results.
-
----
-
-## Running Tests
-
-All tests are run via `pytest`. They are highly parameterized and will:
-
-1. Load sample data (an `.npz` file) from a path you specify.  
-2. Iterate over a variety of different pipeline configurations (dimensions, unsharp parameters, remap methods, samplers, etc.).  
-3. Perform forward/backward projections and compute the MSE.  
-4. Store results in an SQLite database (`test_results.db`).  
-5. Generate a chart of the top 10 configurations (saved as `best_configs_chart.png`).  
-
-To run the tests:
-
-```bash
-pytest tests
-```
-
-### Example Chart and Database
-
-- `best_configs_chart.png`: Summarizes the best MSE results (lowest MSE).
-- `test_results.db`: Stores all results and configurations for further analysis.
+4. **ProjectionRegistry**  
+   - Project that implements the projection modules
+   https://github.com/RobinsonGarcia/projections/tree/main
 
 ---
 
@@ -314,7 +276,8 @@ pytest tests
 
 - **Add new samplers**: Implement a new class inheriting from `Sampler` and register it in `SAMPLER_CLASSES`.
 - **Add new projectors**: Implement a new class inheriting from `ProjectionStrategy` and add it to `PROJECTOR_CLASSES`.
-- **Customize the pipeline**: You can create your own `PipelineConfig` or expand `PipelineFullConfig` to incorporate other transformations.
+- **HF integration to handle depth estimation**: Implement seamless integration with HF to load and run DA inference
+
 
 ---
 
@@ -328,8 +291,8 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 For questions or feedback, contact the maintainers:
 
-- **Your Name**: your.email@example.com
-- **GitHub**: [https://github.com/your-username](https://github.com/your-username)
+- **Your Name**: rlsgarcia@icloud.com
+- **GitHub**: [https://github.com/RobinsonGarcia](https://github.com/RobinsonGarcia)
 
 ---
 
