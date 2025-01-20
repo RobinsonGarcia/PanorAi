@@ -20,30 +20,6 @@ def setup_logging(verbose):
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Projection Pipeline CLI",
-        epilog="""
-Examples:
-1. List available projections and samplers:
-   $ panorai-cli --list-projections
-   $ panorai-cli --list-samplers
-
-2. Perform a forward projection:
-   $ panorai-cli --input ../images/eq_sample.png --projection_name=gnomonic --operation project
-
-3. Perform a forward projection with additional preprocessing:
-   $ panorai-cli --input ../images/eq_sample.png --projection_name=gnomonic --operation project --kwargs shadow_angle=30
-
-4. Perform backward projection:
-   $ panorai-cli --input output.npz --projection_name=gnomonic --operation backward
-
-5. Perform both projection and backward:
-   $ panorai-cli --input ../images/eq_sample.png --projection_name=gnomonic
-
-6. List all files in an NPZ input:
-   $ panorai-cli --input sample.npz --list-files
-
-7. Show pipeline details:
-   $ panorai-cli --projection_name=gnomonic --show-pipeline
-"""
     )
 
     # Utility options
@@ -63,8 +39,10 @@ Examples:
     parser.add_argument("--kwargs", nargs="*", default=[], help="Additional arguments for the operation in key=value format.")
 
     # Output options
-    parser.add_argument("--output_dir", type=str, default=".cache", help="Base directory to save the output files.")
+    parser.add_argument("--output_dir", type=str, default=".cache", help="Base directory to save output files.")
     parser.add_argument("--save_npz", action="store_true", help="Save results as a single .npz file.")
+    parser.add_argument("--save_png", action="store_true", help="Save PNG images for each result.")
+    parser.add_argument("--cmap", type=str, default="jet", help="Colormap name for single-channel arrays.")
 
     # Logging and verbosity
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
@@ -109,49 +87,160 @@ def save_metadata(output_dir, args):
         json.dump(metadata, f, indent=4)
     logging.info(f"Saved metadata to {metadata_path}.")
 
-def normalize_array(array):
-    """Normalize an array to the range [0, 255] for uint8 saving."""
-    if np.min(array) == np.max(array):
+def normalize_array(array: np.ndarray) -> np.ndarray:
+    """
+    Normalize a float array to the range [0, 255] for display.
+    Returns a uint8 array.
+    """
+    if array.size == 0:
+        return array.astype(np.uint8)
+    min_val, max_val = np.min(array), np.max(array)
+    if min_val == max_val:
         return np.zeros_like(array, dtype=np.uint8)
-    normalized = (array - np.min(array)) / (np.max(array) - np.min(array)) * 255
-    return normalized.astype(np.uint8)
+    norm = (array - min_val) / (max_val - min_val)
+    return (norm * 255).astype(np.uint8)
 
-def save_output(result, output_dir, save_npz, operation=None):
-    operation_suffix = f"_{operation}" if operation else ""
+def apply_colormap(array_2d: np.ndarray, cmap_name: str = "jet") -> np.ndarray:
+    """
+    Apply a colormap to a single-channel (H, W) array.
+    Returns a 3-channel BGR image for visualization.
+    """
+    norm_img = normalize_array(array_2d)
 
-    for point, content in result.items():
-        if point == "stacked":
+    cmap_dict = {
+        "jet": cv2.COLORMAP_JET,
+        "hot": cv2.COLORMAP_HOT,
+        "viridis": cv2.COLORMAP_VIRIDIS,
+        # add more if needed
+    }
+    cv2_cmap = cmap_dict.get(cmap_name.lower(), cv2.COLORMAP_JET)
+
+    color_img = cv2.applyColorMap(norm_img, cv2_cmap)
+    return color_img
+
+def compose_3channel(array_3d: np.ndarray) -> np.ndarray:
+    """
+    For a 3-channel numeric array (e.g., shape (H, W, 3)), normalize each channel independently
+    and compose a single 8-bit 3-channel image.
+
+    Returns a (H, W, 3)-shaped uint8 array suitable for cv2.imwrite().
+    """
+    # Assume array_3d.shape == (H, W, 3).
+    out = np.zeros_like(array_3d, dtype=np.uint8)
+    for c in range(3):
+        out[..., c] = normalize_array(array_3d[..., c])
+    return out
+
+def _flatten_result_for_npz(result_dict, prefix=""):
+    """
+    Recursively traverse the 'result' dictionary and collect:
+    { "<prefix>.<original_key>": (np_array, original_key) }
+    """
+    flat_data = {}
+    for key, val in result_dict.items():
+        new_key = f"{prefix}.{key}" if prefix else key
+
+        if isinstance(val, dict):
+            nested = _flatten_result_for_npz(val, prefix=new_key)
+            flat_data.update(nested)
             continue
 
-        point_dir = os.path.join(output_dir, f"{point}{operation_suffix}")
-        os.makedirs(point_dir, exist_ok=True)
+        if hasattr(val, "__dict__") and all(isinstance(v, np.ndarray) for v in val.__dict__.values()):
+            for subk, arr in val.__dict__.items():
+                final_key = f"{new_key}.{subk}"
+                flat_data[final_key] = (arr, subk)
+            continue
 
-        if isinstance(content, dict):
-            for key, pipeline_data in content.items():
-                if isinstance(pipeline_data, PipelineData):
-                    for data_type, array in pipeline_data.__dict__.items():
-                        if isinstance(array, np.ndarray):
-                            image_path = os.path.join(point_dir, f"{key}_{data_type}.png")
-                            if data_type == "rgb":
-                                # Save RGB directly without conversion
-                                cv2.imwrite(image_path, array)
-                            else:
-                                normalized_array = normalize_array(array)
-                                cv2.imwrite(image_path, normalized_array)
-                            logging.info(f"Saved {data_type} of {key} in {point} to {image_path}.")
-        elif isinstance(content, np.ndarray):
-            image_path = os.path.join(point_dir, f"{point}{operation_suffix}.png")
-            if content.ndim == 2:  # Grayscale-like arrays
-                normalized_array = normalize_array(content)
-                cv2.imwrite(image_path, normalized_array)
-            else:
-                cv2.imwrite(image_path, content)
-            logging.info(f"Saved array for {point} to {image_path}.")
+        if isinstance(val, np.ndarray):
+            flat_data[new_key] = (val, key)
+        else:
+            logging.debug(f"Ignoring key '{new_key}' - not dict or ndarray.")
+    return flat_data
 
+def save_output(
+    result: dict,
+    output_dir: str,
+    save_npz: bool,
+    operation: str = None,
+    save_png: bool = False,
+    cmap: str = "jet"
+):
+    """
+    Saves the entire `result` dictionary into a single compressed NPZ (output.npz) if requested,
+    and optionally exports PNG images using the input's data format to decide how to save.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Flatten the results
+    flat_dict = _flatten_result_for_npz(result)
+
+    # 1) Save as NPZ if requested
     if save_npz:
-        filename = f"output{operation_suffix}.npz"
-        np.savez_compressed(os.path.join(output_dir, filename), **result)
-        logging.info(f"Saved all results to {os.path.join(output_dir, filename)}.")
+        npz_path = os.path.join(output_dir, "output.npz")
+        arrays_for_npz = {k: v[0] for k, v in flat_dict.items()}  # just the arrays
+        np.savez_compressed(npz_path, **arrays_for_npz)
+        logging.info(f"Saved all arrays to {npz_path}.")
+
+    # 2) Optionally save PNG images
+    if save_png:
+        for full_key, (array, original_name) in flat_dict.items():
+            safe_key = full_key.replace(".", "_")
+
+            # Case 1: It's labeled "rgb" => treat as color image
+            if original_name.lower() == "rgb":
+                # Must be 3-channel, or we skip
+                if array.ndim == 3 and array.shape[2] == 3:
+                    #
+                    # -- FIX: Convert from float64 (or any non-uint8) to uint8 if needed --
+                    #
+                    if array.dtype != np.uint8:
+                        # Normalize to 0..255 and cast
+                        array = normalize_array(array)  # returns uint8 in [0..255]
+                    
+                    # Now we can safely convert color without errors
+                    bgr_img = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+                    
+                    png_path = os.path.join(output_dir, f"{safe_key}.png")
+                    cv2.imwrite(png_path, bgr_img)
+                    logging.info(f"Saved RGB array '{original_name}' to {png_path} (converted to BGR).")
+                else:
+                    logging.warning(
+                        f"'{original_name}' was labeled RGB but has shape {array.shape}. Skipping."
+                    )
+                continue
+
+            # Otherwise, treat as numeric data (depth/xyz/etc.) ...
+            
+            if array.ndim == 2:
+                # Single-channel => apply colormap
+                color_img = apply_colormap(array, cmap_name=cmap)
+                png_path = os.path.join(output_dir, f"{safe_key}_colormap.png")
+                cv2.imwrite(png_path, color_img)
+                logging.info(f"Saved numeric array '{original_name}' with colormap to {png_path}.")
+
+            elif array.ndim == 3 and array.shape[2] == 1:
+                # Single-channel but (H, W, 1)
+                color_img = apply_colormap(array[..., 0], cmap_name=cmap)
+                png_path = os.path.join(output_dir, f"{safe_key}_colormap.png")
+                cv2.imwrite(png_path, color_img)
+                logging.info(f"Saved numeric array '{original_name}' (1-channel) with colormap to {png_path}.")
+
+            elif array.ndim == 3 and array.shape[2] == 3:
+                # 3-channel numeric array => compose into single image
+                composed = compose_3channel(array)
+                png_path = os.path.join(output_dir, f"{safe_key}.png")
+                cv2.imwrite(png_path, composed)
+                logging.info(
+                    f"Saved numeric 3-channel array '{original_name}' as single image {png_path}."
+                )
+            else:
+                # Not easily visualized
+                logging.debug(
+                    f"Skipping PNG for '{full_key}' (original='{original_name}'), shape {array.shape} "
+                    " - not 2D or 3D with 1/3 channels."
+                )
+    else:
+        logging.debug("PNG saving skipped (save_png=False).")
 
 def load_input(input_path, array_files, preprocess_params):
     if input_path.endswith(".npz"):
@@ -229,6 +318,7 @@ def main():
         logging.error("Missing required arguments. Use --help for more information.")
         return
 
+    # Parse extra kwargs
     kwargs = parse_kwargs(args.kwargs)
     preprocess_params = {
         "shadow_angle": kwargs.pop("shadow_angle", 0),
@@ -236,24 +326,60 @@ def main():
         "delta_lon": kwargs.pop("delta_lon", 0),
     }
 
+    # Prepare output directory and metadata
     output_dir = create_unique_output_dir(args.output_dir, args)
     save_metadata(output_dir, args)
 
+    # Load input data
     input_data = load_input(args.input, args.array_files, preprocess_params)
+
+    # Create pipeline
     pipeline = ProjectionPipeline(projection_name=args.projection_name, sampler_name=args.sampler_name)
 
+    # Main operations
     if args.operation == "project":
         result = pipeline.project(data=input_data, **kwargs)
-        save_output(result, output_dir, args.save_npz, operation="project")
+        save_output(
+            result=result,
+            output_dir=output_dir,
+            save_npz=args.save_npz,
+            operation="project",
+            save_png=args.save_png,
+            cmap=args.cmap
+        )
+
     elif args.operation == "backward":
         result = pipeline.backward(data=input_data.as_dict(), **kwargs)
-        save_output(result, output_dir, args.save_npz, operation="backward")
-    else:  # Perform both project and backward if no operation specified
+        save_output(
+            result=result,
+            output_dir=output_dir,
+            save_npz=args.save_npz,
+            operation="backward",
+            save_png=args.save_png,
+            cmap=args.cmap
+        )
+
+    else:
+        # If no operation is specified, do both (project + backward)
         projection_result = pipeline.project(data=input_data, **kwargs)
-        save_output(projection_result, output_dir, args.save_npz, operation="project")
+        save_output(
+            result=projection_result,
+            output_dir=output_dir,
+            save_npz=args.save_npz,
+            operation="project",
+            save_png=args.save_png,
+            cmap=args.cmap
+        )
 
         backward_result = pipeline.backward(data=projection_result, **kwargs)
-        save_output(backward_result, output_dir, args.save_npz, operation="backward")
+        save_output(
+            result=backward_result,
+            output_dir=output_dir,
+            save_npz=args.save_npz,
+            operation="backward",
+            save_png=args.save_png,
+            cmap=args.cmap
+        )
 
 if __name__ == "__main__":
     main()
