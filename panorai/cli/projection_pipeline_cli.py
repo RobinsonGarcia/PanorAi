@@ -1,10 +1,12 @@
 import argparse
 import os
 import json
+import sys
 import numpy as np
 import logging
 from datetime import datetime
 import cv2
+
 from panorai.pipeline.pipeline import ProjectionPipeline
 from panorai.pipeline.pipeline_data import PipelineData
 from panorai.submodules.projections import ProjectionRegistry
@@ -17,53 +19,84 @@ def setup_logging(verbose):
         level=logging_level,
     )
 
+def list_all_projections_and_samplers():
+    """
+    Always log which projections and samplers exist, for user awareness.
+    """
+    # Projections
+    projs = ProjectionRegistry.list_projections()
+    logging.info("Available Projections are:")
+    for p in projs:
+        logging.info(f"  - {p}")
+
+    # Samplers
+    sams = SamplerRegistry.list_samplers()
+    logging.info("Available Samplers are:")
+    for s in sams:
+        logging.info(f"  - {s}")
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Projection Pipeline CLI",
+        description="Panorai CLI for spherical image processing.",
+        # Provide usage examples in the epilog
+        epilog="""
+Examples:
+
+1) Gnomonic projection with shadow_angle=30
+   panorai-cli --input ../images/sample2.npz --kwargs shadow_angle=30 --array_files rgb z
+
+2) Gnomonic projection with shadow_angle=30, rotate latitude=5 and longitude=5
+   panorai-cli --input ../images/sample2.npz --kwargs shadow_angle=30 delta_lat=5 delta_lon=5 --array_files rgb z
+
+3) IcosahedronSampler with shadow_angle=30, subdivisions=2
+   panorai-cli --sampler_name=IcosahedronSampler --input ../images/sample2.npz --kwargs shadow_angle=30 subdivisions=2 --array_files rgb z
+
+4) FibonacciSampler with n_points=30
+   panorai-cli --sampler_name=FibonacciSampler --input ../images/sample2.npz --kwargs n_points=30 --array_files rgb z
+"""
     )
 
+    # If user runs with no flags at all, show help
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
     # Utility options
-    parser.add_argument("--list-projections", action="store_true", help="List all available projections.")
-    parser.add_argument("--list-samplers", action="store_true", help="List all available samplers.")
+    parser.add_argument("--list-projections", action="store_true", help="List all available projections and exit.")
+    parser.add_argument("--list-samplers", action="store_true", help="List all available samplers and exit.")
     parser.add_argument("--list-files", action="store_true", help="List all files inside the provided NPZ input.")
     parser.add_argument("--show-pipeline", action="store_true", help="Show details of the instantiated pipeline object.")
 
     # Input parameters
-    parser.add_argument("--input", type=str, help="Path to the input file or directory (required).")
+    parser.add_argument("--input", type=str, help="Path to the input file or directory.")
     parser.add_argument("--array_files", type=str, nargs="*", help="Keys for data in the .npz file (e.g., rgb, depth).")
 
     # Projection parameters
-    parser.add_argument("--projection_name", type=str, help="Name of the projection to use (required).")
-    parser.add_argument("--sampler_name", type=str, default=None, help="Name of the sampler to use (optional).")
+    parser.add_argument("--projection_name", type=str, default="gnomonic",
+                        help="Name of the projection to use (default='gnomonic').")
+    parser.add_argument("--sampler_name", type=str, default="CubeSampler",
+                        help="Name of the sampler to use (default='CubeSampler').")
     parser.add_argument("--operation", choices=["project", "backward"], help="Operation to perform.")
-    parser.add_argument("--kwargs", nargs="*", default=[], help="Additional arguments for the operation in key=value format.")
+    parser.add_argument("--kwargs", nargs="*", default=[], help="Additional arguments in key=value format.")
 
     # Output options
-    parser.add_argument("--output_dir", type=str, default=".cache", help="Base directory to save output files.")
-    parser.add_argument("--save_npz", action="store_true", help="Save results as a single .npz file.")
-    parser.add_argument("--save_png", action="store_true", help="Save PNG images for each result.")
-    parser.add_argument("--cmap", type=str, default="jet", help="Colormap name for single-channel arrays.")
+    parser.add_argument("--output_dir", type=str, default=".cache",
+                        help="Base directory to save the output files (default='.cache').")
+    parser.add_argument("--save_npz", action="store_true", default=True,
+                        help="Save results as a single .npz file (default=True). Disable to save storage.")
+    parser.add_argument("--save_png", action="store_true", default=True,
+                        help="Save illustrative PNG images (default=True). Disable to save storage.")
+    parser.add_argument("--cmap", type=str, default="jet",
+                        help="Colormap name for single-channel arrays (default='jet').")
 
     # Logging and verbosity
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
+    parser.add_argument("--verbose", action="store_true", default=True,
+                        help="Enable verbose logging (default=True). Pass --no-verbose to silence (see below).")
+
+    # We'll do a custom approach to let people disable verbose if they want
+    parser.add_argument("--no-verbose", action="store_true", help="Disable verbose logging (override).")
 
     return parser.parse_args()
-
-def list_projections():
-    logging.info("Available Projections:")
-    for projection in ProjectionRegistry.list_projections():
-        logging.info(f" - {projection}")
-
-def list_samplers():
-    logging.info("Available Samplers:")
-    for sampler in SamplerRegistry.list_samplers():
-        logging.info(f" - {sampler}")
-
-def list_npz_files(input_path):
-    with np.load(input_path) as data:
-        logging.info("Files in NPZ:")
-        for key in data.keys():
-            logging.info(f" - {key}")
 
 def create_unique_output_dir(base_dir, args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -80,18 +113,26 @@ def save_metadata(output_dir, args):
         "operation": args.operation,
         "kwargs": args.kwargs,
         "output_dir": output_dir,
-        "command": " ".join(os.sys.argv)
+        "command": " ".join(sys.argv),
+        "save_npz": args.save_npz,
+        "save_png": args.save_png,
+        "verbose": not args.no_verbose,
     }
     metadata_path = os.path.join(output_dir, "metadata.json")
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=4)
     logging.info(f"Saved metadata to {metadata_path}.")
 
+def list_npz_files(input_path):
+    with np.load(input_path) as data:
+        logging.info("Files in NPZ:")
+        for key in data.keys():
+            logging.info(f" - {key}")
+
+###############################################################################
+# Utility code: normalization, colormap, flattening, etc.
+###############################################################################
 def normalize_array(array: np.ndarray) -> np.ndarray:
-    """
-    Normalize a float array to the range [0, 255] for display.
-    Returns a uint8 array.
-    """
     if array.size == 0:
         return array.astype(np.uint8)
     min_val, max_val = np.min(array), np.max(array)
@@ -101,41 +142,23 @@ def normalize_array(array: np.ndarray) -> np.ndarray:
     return (norm * 255).astype(np.uint8)
 
 def apply_colormap(array_2d: np.ndarray, cmap_name: str = "jet") -> np.ndarray:
-    """
-    Apply a colormap to a single-channel (H, W) array.
-    Returns a 3-channel BGR image for visualization.
-    """
     norm_img = normalize_array(array_2d)
-
     cmap_dict = {
         "jet": cv2.COLORMAP_JET,
         "hot": cv2.COLORMAP_HOT,
         "viridis": cv2.COLORMAP_VIRIDIS,
-        # add more if needed
     }
     cv2_cmap = cmap_dict.get(cmap_name.lower(), cv2.COLORMAP_JET)
-
     color_img = cv2.applyColorMap(norm_img, cv2_cmap)
     return color_img
 
 def compose_3channel(array_3d: np.ndarray) -> np.ndarray:
-    """
-    For a 3-channel numeric array (e.g., shape (H, W, 3)), normalize each channel independently
-    and compose a single 8-bit 3-channel image.
-
-    Returns a (H, W, 3)-shaped uint8 array suitable for cv2.imwrite().
-    """
-    # Assume array_3d.shape == (H, W, 3).
     out = np.zeros_like(array_3d, dtype=np.uint8)
     for c in range(3):
         out[..., c] = normalize_array(array_3d[..., c])
     return out
 
 def _flatten_result_for_npz(result_dict, prefix=""):
-    """
-    Recursively traverse the 'result' dictionary and collect:
-    { "<prefix>.<original_key>": (np_array, original_key) }
-    """
     flat_data = {}
     for key, val in result_dict.items():
         new_key = f"{prefix}.{key}" if prefix else key
@@ -157,6 +180,9 @@ def _flatten_result_for_npz(result_dict, prefix=""):
             logging.debug(f"Ignoring key '{new_key}' - not dict or ndarray.")
     return flat_data
 
+###############################################################################
+# Main saving logic
+###############################################################################
 def save_output(
     result: dict,
     output_dir: str,
@@ -165,85 +191,71 @@ def save_output(
     save_png: bool = False,
     cmap: str = "jet"
 ):
-    """
-    Saves the entire `result` dictionary into a single compressed NPZ (output.npz) if requested,
-    and optionally exports PNG images using the input's data format to decide how to save.
-    """
     os.makedirs(output_dir, exist_ok=True)
-
-    # Flatten the results
     flat_dict = _flatten_result_for_npz(result)
 
     # 1) Save as NPZ if requested
     if save_npz:
         npz_path = os.path.join(output_dir, "output.npz")
-        arrays_for_npz = {k: v[0] for k, v in flat_dict.items()}  # just the arrays
+        arrays_for_npz = {k: v[0] for k, v in flat_dict.items()}
         np.savez_compressed(npz_path, **arrays_for_npz)
         logging.info(f"Saved all arrays to {npz_path}.")
+        logging.info("Note: The .npz file contains the most complete data. Use --no-save_npz to save storage.")
 
     # 2) Optionally save PNG images
     if save_png:
+        logging.info("Saving illustrative .png files (one per array if possible). Use --no-save_png to save storage.")
         for full_key, (array, original_name) in flat_dict.items():
             safe_key = full_key.replace(".", "_")
 
-            # Case 1: It's labeled "rgb" => treat as color image
             if original_name.lower() == "rgb":
-                # Must be 3-channel, or we skip
                 if array.ndim == 3 and array.shape[2] == 3:
-                    #
-                    # -- FIX: Convert from float64 (or any non-uint8) to uint8 if needed --
-                    #
+                    # Ensure it's 8-bit
                     if array.dtype != np.uint8:
-                        # Normalize to 0..255 and cast
-                        array = normalize_array(array)  # returns uint8 in [0..255]
-                    
-                    # Now we can safely convert color without errors
+                        array = normalize_array(array)
+                    # Convert from "RGB" to "BGR" for correct .png
                     bgr_img = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
-                    
                     png_path = os.path.join(output_dir, f"{safe_key}.png")
                     cv2.imwrite(png_path, bgr_img)
                     logging.info(f"Saved RGB array '{original_name}' to {png_path} (converted to BGR).")
                 else:
                     logging.warning(
-                        f"'{original_name}' was labeled RGB but has shape {array.shape}. Skipping."
+                        f"'{original_name}' labeled as RGB but shape={array.shape}. Skipping."
                     )
                 continue
 
-            # Otherwise, treat as numeric data (depth/xyz/etc.) ...
-            
+            # Numeric data
             if array.ndim == 2:
-                # Single-channel => apply colormap
                 color_img = apply_colormap(array, cmap_name=cmap)
                 png_path = os.path.join(output_dir, f"{safe_key}_colormap.png")
                 cv2.imwrite(png_path, color_img)
-                logging.info(f"Saved numeric array '{original_name}' with colormap to {png_path}.")
+                logging.debug(f"Saved single-channel numeric array '{original_name}' to {png_path}.")
 
             elif array.ndim == 3 and array.shape[2] == 1:
-                # Single-channel but (H, W, 1)
                 color_img = apply_colormap(array[..., 0], cmap_name=cmap)
                 png_path = os.path.join(output_dir, f"{safe_key}_colormap.png")
                 cv2.imwrite(png_path, color_img)
-                logging.info(f"Saved numeric array '{original_name}' (1-channel) with colormap to {png_path}.")
+                logging.debug(f"Saved single-channel numeric array '{original_name}' to {png_path}.")
 
             elif array.ndim == 3 and array.shape[2] == 3:
-                # 3-channel numeric array => compose into single image
                 composed = compose_3channel(array)
                 png_path = os.path.join(output_dir, f"{safe_key}.png")
                 cv2.imwrite(png_path, composed)
-                logging.info(
-                    f"Saved numeric 3-channel array '{original_name}' as single image {png_path}."
-                )
+                logging.debug(f"Saved 3-channel numeric array '{original_name}' as single image {png_path}.")
+
             else:
-                # Not easily visualized
                 logging.debug(
-                    f"Skipping PNG for '{full_key}' (original='{original_name}'), shape {array.shape} "
+                    f"Skipping PNG for '{full_key}' (original='{original_name}'), shape {array.shape}"
                     " - not 2D or 3D with 1/3 channels."
                 )
     else:
-        logging.debug("PNG saving skipped (save_png=False).")
+        logging.debug("PNG saving is disabled. Use --save_png to enable it.")
 
+###############################################################################
+# Input loading logic
+###############################################################################
 def load_input(input_path, array_files, preprocess_params):
-    if input_path.endswith(".npz"):
+    if input_path and input_path.endswith(".npz"):
         with np.load(input_path) as data:
             available_keys = list(data.keys())
             if not array_files:
@@ -260,11 +272,16 @@ def load_input(input_path, array_files, preprocess_params):
                     logging.error("Available keys are:")
                     for key in available_keys:
                         logging.error(f" - {key}")
-                    exit(1)
+                    sys.exit(1)
             pipeline_data = PipelineData.from_dict({key: data[key] for key in array_files})
-    else:
+    elif input_path:
+        # e.g. a .png, .jpg
         from skimage.io import imread
         pipeline_data = PipelineData(rgb=imread(input_path))
+    else:
+        # no input -> no data
+        logging.warning("No input provided. Creating empty PipelineData.")
+        pipeline_data = PipelineData(rgb=np.zeros((1,1,3), dtype=np.uint8))
 
     shadow_angle = preprocess_params.get("shadow_angle", 0)
     delta_lat = preprocess_params.get("delta_lat", 0)
@@ -286,39 +303,49 @@ def parse_kwargs(kwargs_list):
         kwargs[key] = value
     return kwargs
 
+###############################################################################
+# Main
+###############################################################################
 def main():
     args = parse_args()
+
+    # If user specifically did --no-verbose, override
+    if args.no_verbose:
+        args.verbose = False
+
     setup_logging(args.verbose)
 
-    if args.list_projections:
-        list_projections()
-        return
+    # Always show what's available
+    list_all_projections_and_samplers()
 
-    if args.list_samplers:
-        list_samplers()
-        return
+    # If user asked only to list projections or samplers, we exit
+    if args.list_projections or args.list_samplers:
+        sys.exit(0)
 
+    # If user wants to list files in an NPZ
     if args.list_files:
         if not args.input or not args.input.endswith(".npz"):
             logging.error("Please provide a valid NPZ input to list files.")
-            return
+            sys.exit(1)
         list_npz_files(args.input)
-        return
+        sys.exit(0)
 
+    # If user wants to show pipeline and exit
     if args.show_pipeline:
-        if not args.projection_name:
-            logging.error("Missing required argument: --projection_name. Use --help for more information.")
-            return
-        pipeline = ProjectionPipeline(projection_name=args.projection_name, sampler_name=args.sampler_name)
+        pipeline = ProjectionPipeline(
+            projection_name=args.projection_name,
+            sampler_name=args.sampler_name
+        )
         logging.info("Instantiated Pipeline Object:")
         logging.info(repr(pipeline))
-        return
+        sys.exit(0)
 
-    if not args.input or not args.projection_name:
-        logging.error("Missing required arguments. Use --help for more information.")
-        return
+    # Setup the final operation
+    # log a note that user can remove default flags
+    logging.info("Note: .npz saving is on by default (use --no-save_npz to disable).")
+    logging.info("Note: .png saving is on by default for illustration (use --no-save_png to disable).")
 
-    # Parse extra kwargs
+    # parse custom kwargs
     kwargs = parse_kwargs(args.kwargs)
     preprocess_params = {
         "shadow_angle": kwargs.pop("shadow_angle", 0),
@@ -326,17 +353,20 @@ def main():
         "delta_lon": kwargs.pop("delta_lon", 0),
     }
 
-    # Prepare output directory and metadata
+    # Create output dir
     output_dir = create_unique_output_dir(args.output_dir, args)
     save_metadata(output_dir, args)
 
-    # Load input data
+    # Load data
     input_data = load_input(args.input, args.array_files, preprocess_params)
 
     # Create pipeline
-    pipeline = ProjectionPipeline(projection_name=args.projection_name, sampler_name=args.sampler_name)
+    pipeline = ProjectionPipeline(
+        projection_name=args.projection_name,
+        sampler_name=args.sampler_name
+    )
 
-    # Main operations
+    # Decide operation
     if args.operation == "project":
         result = pipeline.project(data=input_data, **kwargs)
         save_output(
@@ -347,7 +377,6 @@ def main():
             save_png=args.save_png,
             cmap=args.cmap
         )
-
     elif args.operation == "backward":
         result = pipeline.backward(data=input_data.as_dict(), **kwargs)
         save_output(
@@ -358,12 +387,11 @@ def main():
             save_png=args.save_png,
             cmap=args.cmap
         )
-
     else:
-        # If no operation is specified, do both (project + backward)
-        projection_result = pipeline.project(data=input_data, **kwargs)
+        # No operation => do both
+        result_forward = pipeline.project(data=input_data, **kwargs)
         save_output(
-            result=projection_result,
+            result=result_forward,
             output_dir=output_dir,
             save_npz=args.save_npz,
             operation="project",
@@ -371,9 +399,9 @@ def main():
             cmap=args.cmap
         )
 
-        backward_result = pipeline.backward(data=projection_result, **kwargs)
+        result_backward = pipeline.backward(data=result_forward, **kwargs)
         save_output(
-            result=backward_result,
+            result=result_backward,
             output_dir=output_dir,
             save_npz=args.save_npz,
             operation="backward",
