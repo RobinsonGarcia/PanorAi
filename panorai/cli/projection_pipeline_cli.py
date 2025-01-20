@@ -135,10 +135,6 @@ def save_output(result, output_dir, save_npz, operation=None):
                             if data_type == "rgb":
                                 # Save RGB directly without conversion
                                 cv2.imwrite(image_path, array)
-                            elif data_type == "depth" or "z_backward" in data_type:
-                                # Normalize depth for visibility
-                                normalized_array = normalize_array(array)
-                                cv2.imwrite(image_path, normalized_array)
                             else:
                                 normalized_array = normalize_array(array)
                                 cv2.imwrite(image_path, normalized_array)
