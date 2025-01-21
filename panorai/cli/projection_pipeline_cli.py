@@ -38,7 +38,6 @@ def list_all_projections_and_samplers():
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Panorai CLI for spherical image processing.",
-        # Provide usage examples in the epilog
         epilog="""
 Examples:
 
@@ -92,8 +91,6 @@ Examples:
     # Logging and verbosity
     parser.add_argument("--verbose", action="store_true", default=True,
                         help="Enable verbose logging (default=True). Pass --no-verbose to silence (see below).")
-
-    # We'll do a custom approach to let people disable verbose if they want
     parser.add_argument("--no-verbose", action="store_true", help="Disable verbose logging (override).")
 
     return parser.parse_args()
@@ -159,6 +156,10 @@ def compose_3channel(array_3d: np.ndarray) -> np.ndarray:
     return out
 
 def _flatten_result_for_npz(result_dict, prefix=""):
+    """
+    Recursively traverse and collect all np.ndarray objects
+    into a dict { <flattened_key>: (ndarray, original_subkey) }.
+    """
     flat_data = {}
     for key, val in result_dict.items():
         new_key = f"{prefix}.{key}" if prefix else key
@@ -184,36 +185,50 @@ def _flatten_result_for_npz(result_dict, prefix=""):
 # Main saving logic
 ###############################################################################
 def save_output(
-    result: dict,
+    combined_result: dict,
     output_dir: str,
     save_npz: bool,
     operation: str = None,
     save_png: bool = False,
     cmap: str = "jet"
 ):
-    os.makedirs(output_dir, exist_ok=True)
-    flat_dict = _flatten_result_for_npz(result)
+    """
+    - combined_result is a dictionary that may contain:
+      * 'project': <dict returned by pipeline.project(...)>
+      * 'backward': <dict returned by pipeline.backward(...)>
+      or both, if no operation was specified.
 
-    # 1) Save as NPZ if requested
+    - We first flatten and save the raw arrays into .npz (if save_npz=True).
+    - Then we optionally create PNG images from the same arrays, applying
+      colormaps or normalizations as needed for visualization (without altering
+      the raw data that went into the .npz).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1) Flatten original raw arrays BEFORE any normalization
+    flat_dict = _flatten_result_for_npz(combined_result)
+
+    # 2) Save the NPZ with raw data
     if save_npz:
         npz_path = os.path.join(output_dir, "output.npz")
-        arrays_for_npz = {k: v[0] for k, v in flat_dict.items()}
+        arrays_for_npz = {k: v[0] for k, v in flat_dict.items()}  # The original arrays
         np.savez_compressed(npz_path, **arrays_for_npz)
         logging.info(f"Saved all arrays to {npz_path}.")
         logging.info("Note: The .npz file contains the most complete data. Use --no-save_npz to save storage.")
 
-    # 2) Optionally save PNG images
+    # 3) Optionally create PNG images for quick inspection
     if save_png:
         logging.info("Saving illustrative .png files (one per array if possible). Use --no-save_png to save storage.")
         for full_key, (array, original_name) in flat_dict.items():
             safe_key = full_key.replace(".", "_")
 
+            # If recognized as "rgb", handle color conversion
             if original_name.lower() == "rgb":
                 if array.ndim == 3 and array.shape[2] == 3:
-                    # Ensure it's 8-bit
+                    # Ensure 8-bit
                     if array.dtype != np.uint8:
                         array = normalize_array(array)
-                    # Convert from "RGB" to "BGR" for correct .png
+                    # Convert from RGB -> BGR
                     bgr_img = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
                     png_path = os.path.join(output_dir, f"{safe_key}.png")
                     cv2.imwrite(png_path, bgr_img)
@@ -224,7 +239,7 @@ def save_output(
                     )
                 continue
 
-            # Numeric data
+            # Otherwise numeric data
             if array.ndim == 2:
                 color_img = apply_colormap(array, cmap_name=cmap)
                 png_path = os.path.join(output_dir, f"{safe_key}_colormap.png")
@@ -275,7 +290,7 @@ def load_input(input_path, array_files, preprocess_params):
                     sys.exit(1)
             pipeline_data = PipelineData.from_dict({key: data[key] for key in array_files})
     elif input_path:
-        # e.g. a .png, .jpg
+        # e.g. .png or .jpg
         from skimage.io import imread
         pipeline_data = PipelineData(rgb=imread(input_path))
     else:
@@ -340,12 +355,11 @@ def main():
         logging.info(repr(pipeline))
         sys.exit(0)
 
-    # Setup the final operation
-    # log a note that user can remove default flags
+    # Inform about default saving
     logging.info("Note: .npz saving is on by default (use --no-save_npz to disable).")
     logging.info("Note: .png saving is on by default for illustration (use --no-save_png to disable).")
 
-    # parse custom kwargs
+    # Parse custom kwargs
     kwargs = parse_kwargs(args.kwargs)
     preprocess_params = {
         "shadow_angle": kwargs.pop("shadow_angle", 0),
@@ -366,48 +380,33 @@ def main():
         sampler_name=args.sampler_name
     )
 
-    # Decide operation
-    if args.operation == "project":
-        result = pipeline.project(data=input_data, **kwargs)
-        save_output(
-            result=result,
-            output_dir=output_dir,
-            save_npz=args.save_npz,
-            operation="project",
-            save_png=args.save_png,
-            cmap=args.cmap
-        )
-    elif args.operation == "backward":
-        result = pipeline.backward(data=input_data.as_dict(), **kwargs)
-        save_output(
-            result=result,
-            output_dir=output_dir,
-            save_npz=args.save_npz,
-            operation="backward",
-            save_png=args.save_png,
-            cmap=args.cmap
-        )
-    else:
-        # No operation => do both
-        result_forward = pipeline.project(data=input_data, **kwargs)
-        save_output(
-            result=result_forward,
-            output_dir=output_dir,
-            save_npz=args.save_npz,
-            operation="project",
-            save_png=args.save_png,
-            cmap=args.cmap
-        )
+    # Collect results in a single dictionary
+    combined_result = {}
 
-        result_backward = pipeline.backward(data=result_forward, **kwargs)
-        save_output(
-            result=result_backward,
-            output_dir=output_dir,
-            save_npz=args.save_npz,
-            operation="backward",
-            save_png=args.save_png,
-            cmap=args.cmap
-        )
+    if args.operation == "project":
+        # For "project" only => store all points
+        combined_result["project"] = pipeline.project(data=input_data, **kwargs)
+
+    elif args.operation == "backward":
+        # For "backward" only => store the backward arrays
+        combined_result["backward"] = pipeline.backward(data=input_data.as_dict(), **kwargs)
+
+    else:
+        # No operation => do both: keep all points + backward
+        project_result = pipeline.project(data=input_data, **kwargs)
+        backward_result = pipeline.backward(data=project_result, **kwargs)
+        combined_result["project"] = project_result
+        combined_result["backward"] = backward_result
+
+    # Now save everything into one NPZ (and optionally PNG)
+    save_output(
+        combined_result,
+        output_dir=output_dir,
+        save_npz=args.save_npz,
+        operation=args.operation,
+        save_png=args.save_png,
+        cmap=args.cmap
+    )
 
 if __name__ == "__main__":
     main()
