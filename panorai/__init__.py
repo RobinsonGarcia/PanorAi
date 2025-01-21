@@ -7,6 +7,8 @@ from .pipeline.utils.resizer import ResizerConfig
 from .sampler.registry import SamplerRegistry
 from .submodules.projections import ProjectionRegistry
 
+__version__ = "v1.0-beta"
+
 __all__ = [
     # Pipeline
     "ProjectionPipeline",
