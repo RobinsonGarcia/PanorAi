@@ -366,8 +366,6 @@ Note: You can pass any updates to these configurations via kwargs.
             raise ValueError("img_shape must be provided if no prior forward shape is available.")
 
         tangent_points = self.sampler.get_tangent_points()
-        combined = np.zeros(img_shape, dtype=np.float32)
-        weight_map = np.zeros(img_shape[:2], dtype=np.float32)
 
         stacked_dict = rect_data.get("stacked")
         if stacked_dict is None:
@@ -418,6 +416,7 @@ Note: You can pass any updates to these configurations via kwargs.
         logger.info("All backward tasks completed.")
 
         idxs, images, masks = zip(*results)
+        self._cached_images_masks = {'images': images, 'idxs': idxs, 'masks': masks, 'tangent_points': tangent_points}
 
         # Apply blending using the registered blender
         combined = self.blender.blend(images, masks)
