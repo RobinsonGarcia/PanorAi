@@ -13,6 +13,8 @@ from .utils.resizer import ResizerConfig
 from ..sampler import SamplerRegistry
 from ..sampler.base_samplers import Sampler  # For type hints
 from ..submodules.projections import ProjectionRegistry
+from ..blender.registry import BlenderRegistry  # Importing BlenderRegistry
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -96,6 +98,7 @@ class ProjectionPipeline:
         self,
         projection_name: str,
         sampler_name: Optional[str] = None,
+        blender_name: Optional[str] = "FeatheringBlender",
         pipeline_cfg: Optional[PipelineConfig] = None,
     ) -> None:
         """
@@ -115,8 +118,9 @@ class ProjectionPipeline:
         self.pipeline_cfg = pipeline_cfg or PipelineConfig(resize_factor=1.0)
         self.projection_name = projection_name
         self.sampler_name = sampler_name
-        self.sampler: Optional[Sampler] = None
+        self.blender_name = blender_name 
 
+        self.sampler: Optional[Sampler] = None
         if self.sampler_name:
             # Retrieve the sampler instance
             self.sampler = SamplerRegistry.get_sampler(sampler_name)
@@ -134,6 +138,9 @@ class ProjectionPipeline:
         self._keys_order: Optional[List[str]] = None
         self._stacked_shape: Optional[Tuple[int, int, int]] = None
 
+        # Retrieve blender instance
+        self.blender = BlenderRegistry.get_blender(self.blender_name)
+
     @classmethod
     def list_samplers(cls) -> List[str]:
         """
@@ -143,6 +150,17 @@ class ProjectionPipeline:
             List[str]: Names of available samplers.
         """
         return SamplerRegistry.list_samplers()
+
+    @classmethod
+    def list_blenders(cls) -> List[str]:
+        """
+        List all registered blending strategies.
+
+        Returns:
+            List[str]: Names of available blending strategies.
+        """
+                
+        return BlenderRegistry.list_blenders()
 
     @classmethod
     def list_projections(cls) -> List[str]:
@@ -157,10 +175,14 @@ class ProjectionPipeline:
     def __repr__(self) -> str:
         projection_config = self.projector.config.config_object.config.model_dump()
         sampler_config = self.sampler.params if self.sampler else {"default": "No sampler selected"}
+        blender_config = self.blender.params if self.blender else {"default": "No sampler selected"}
 
         projection_config_str = "\n".join(f"{key}: {value}" for key, value in projection_config.items())
         sampler_config_str = (
             "\n".join(f"{key}: {value}" for key, value in sampler_config.items()) if sampler_config else "    No parameters"
+        )
+        blender_config_str = (
+            "\n".join(f"{key}: {value}" for key, value in blender_config.items()) if blender_config else "    No parameters"
         )
 
         return f"""
@@ -169,6 +191,9 @@ class ProjectionPipeline:
 
 {self.sampler_name} Sampler - Configurations:
 {sampler_config_str}
+
+{self.blender_name} Blender - Configurations:
+{blender_config_str}
 
 Note: You can pass any updates to these configurations via kwargs.
 """
@@ -183,6 +208,8 @@ Note: You can pass any updates to these configurations via kwargs.
         self.projector.config.update(**kwargs)
         if self.sampler:
             self.sampler.update(**kwargs)
+        if self.blender:
+            self.blender.update(**kwargs)
         self.pipeline_cfg.update(**kwargs)
         self.resizer = self.pipeline_cfg.resizer_cfg.create_resizer()
         self.n_jobs = self.pipeline_cfg.n_jobs
@@ -390,20 +417,10 @@ Note: You can pass any updates to these configurations via kwargs.
         )
         logger.info("All backward tasks completed.")
 
-        # Feathered blending
-        from scipy.ndimage import distance_transform_edt
-        for (idx, eq_img, mask) in results:
-            valid_mask = np.max(eq_img > 0, axis=-1).astype(np.float32)
-            distance = distance_transform_edt(valid_mask)
-            feathered_mask = distance / distance.max() if distance.max() != 0 else valid_mask
+        idxs, images, masks = zip(*results)
 
-            combined += eq_img * feathered_mask[..., None]
-            weight_map += feathered_mask
-
-        # Normalize
-        valid_weights = weight_map > 0
-        combined[valid_weights] /= weight_map[valid_weights, None]
-        combined[~valid_weights] = 0
+        # Apply blending using the registered blender
+        combined = self.blender.blend(images, masks)
 
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)
