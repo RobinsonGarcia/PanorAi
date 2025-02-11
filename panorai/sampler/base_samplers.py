@@ -34,6 +34,38 @@ class Sampler(ABC):
         """
         self.params.update(kwargs)
 
+    def _rotate_points(self, points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """
+        Apply configured latitude/longitude rotations to augment sample points.
+
+        Args:
+            points (List[Tuple[float, float]]): List of (lat, lon) points.
+
+        Returns:
+            List[Tuple[float, float]]: Augmented list with rotated points.
+        """
+        rotations = self.params.get("rotations",[])
+        augmented_points = points[:]
+        for lat_rot, lon_rot in rotations:
+            for lat, lon in points:
+                new_lat = lat + lat_rot
+                new_lon = lon + lon_rot
+
+                # Normalize latitude to stay within -90 to 90 degrees
+                if new_lat > 90:
+                    new_lat = 180 - new_lat
+                    new_lon += 180  # Flip longitude if lat wraps around
+                elif new_lat < -90:
+                    new_lat = -180 - new_lat
+                    new_lon += 180
+
+                # Normalize longitude to stay within -180 to 180 degrees
+                new_lon = (new_lon + 180) % 360 - 180
+
+                augmented_points.append((new_lat, new_lon))
+
+        return augmented_points
+    
 
 class CubeSampler(Sampler):
     """Generates tangent points for a cube-based projection."""
@@ -53,7 +85,7 @@ class CubeSampler(Sampler):
         Returns:
             List[Tuple[float, float]]: A fixed list of 6 (lat, lon) pairs for cube projection.
         """
-        return [
+        points = [
             (0, 0),      # Front
             (0, 90),     # Right
             (0, 180),    # Back
@@ -61,6 +93,7 @@ class CubeSampler(Sampler):
             (90, 0),     # Top
             (-90, 0)     # Bottom
         ]
+        return self._rotate_points(points)
 
 
 class IcosahedronSampler(Sampler):
@@ -167,7 +200,8 @@ class IcosahedronSampler(Sampler):
         """
         vertices, faces = self._generate_icosahedron()
         face_centers = np.mean(vertices[np.array(faces)], axis=1)
-        return [self._cartesian_to_lat_lon(center) for center in face_centers]
+        points = [self._cartesian_to_lat_lon(center) for center in face_centers]
+        return self._rotate_points(points)
 
     @staticmethod
     def _cartesian_to_lat_lon(cartesian: np.ndarray) -> Tuple[float, float]:
@@ -215,7 +249,8 @@ class FibonacciSampler(Sampler):
         y = np.sin(theta) * np.sin(angle)
         z = np.cos(theta)
 
-        return [self._cartesian_to_lat_lon((x[i], y[i], z[i])) for i in range(len(x))]
+        points = [self._cartesian_to_lat_lon((x[i], y[i], z[i])) for i in range(len(x))]
+        return self._rotate_points(points)
 
     @staticmethod
     def _cartesian_to_lat_lon(cartesian: Tuple[float, float, float]) -> Tuple[float, float]:
