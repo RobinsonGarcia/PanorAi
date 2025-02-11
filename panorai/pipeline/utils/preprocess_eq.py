@@ -1,11 +1,73 @@
 import cv2
 import numpy as np
 import logging
-from typing import Tuple
+from typing import Tuple, Union
+from skimage.transform import resize
+
+class ImageResizer:
+    """Handles image resizing with explicit configuration."""
+
+    def __init__(
+        self,
+        resize_factor: float = 1.0,
+        method: str = "skimage",
+        mode: str = "reflect",
+        anti_aliasing: bool = True,
+        interpolation: int = cv2.INTER_LINEAR
+    ) -> None:
+        """
+        Initialize the ImageResizer with explicit attributes.
+
+        Args:
+            resize_factor (float): Factor by which to resize the image. >1 for upsampling, <1 for downsampling.
+            method (str): Resizing method ('skimage' or 'cv2'). Default is 'skimage'.
+            mode (str): Mode parameter for skimage resize. Default is "reflect".
+            anti_aliasing (bool): Whether to apply anti-aliasing (only for skimage).
+            interpolation (int): Interpolation method for cv2.resize. Default is cv2.INTER_LINEAR.
+        """
+        self.resize_factor = resize_factor
+        self.method = method
+        self.mode = mode
+        self.anti_aliasing = anti_aliasing
+        self.interpolation = interpolation
+
+    def resize_image(self, img: np.ndarray, upsample: bool = True) -> np.ndarray:
+        """
+        Resize the input image based on the stored configuration.
+
+        Args:
+            img (np.ndarray): Input image.
+            upsample (bool): Whether we are upsampling or downsampling (affects effective resize_factor).
+
+        Returns:
+            np.ndarray: Resized image.
+        """
+        resize_factor = self.resize_factor if upsample else 1 / self.resize_factor
+
+        if resize_factor != 1.0:
+            new_shape = (int(img.shape[0] * resize_factor), int(img.shape[1] * resize_factor))
+
+            if self.method == "skimage":
+                return resize(
+                    img, (*new_shape, img.shape[2]) if img.ndim == 3 else new_shape,
+                    mode=self.mode,
+                    anti_aliasing=self.anti_aliasing
+                )
+            elif self.method == "cv2":
+                return cv2.resize(
+                    img,
+                    (new_shape[1], new_shape[0]),
+                    interpolation=self.interpolation
+                )
+            else:
+                raise ValueError(f"Unknown resizing method: {self.method}")
+
+        return img
+
 
 class PreprocessEquirectangularImage:
     """
-    Provides methods for extending and rotating equirectangular images (360° panoramas).
+    Provides methods for extending, rotating, and resizing equirectangular images (360° panoramas).
     """
 
     logger = logging.getLogger("EquirectangularImage")
@@ -23,33 +85,15 @@ class PreprocessEquirectangularImage:
         Returns:
             np.ndarray: Image with extended bottom region.
         """
-        cls.logger.info("Starting height extension with shadow_angle=%.2f", shadow_angle)
-
-        if not isinstance(image, np.ndarray):
-            cls.logger.error("Image is not a valid numpy array.")
-            raise TypeError("Image must be a numpy array.")
-
         if shadow_angle <= 0:
-            cls.logger.info("No extension needed as shadow_angle=0 or less.")
             return image  # No extension needed
 
         fov_original = 180.0
-
-        if len(image.shape) == 2:
-            height, width = image.shape
-            channels = 1
-            image = image[..., np.newaxis]
-        else:
-            height, width, channels = image.shape
-
+        height = image.shape[0]
         h_prime = int((shadow_angle / fov_original) * height)
-        cls.logger.debug("Original height: %d, Additional height: %d", height, h_prime)
 
-        black_extension = np.zeros((h_prime, width, channels), dtype=image.dtype)
-        extended_image = np.vstack((image, black_extension))
-
-        cls.logger.info("Height extension complete. New height: %d", extended_image.shape[0])
-        return extended_image
+        black_extension = np.zeros((h_prime, image.shape[1], image.shape[2] if image.ndim == 3 else 1), dtype=image.dtype)
+        return np.vstack((image, black_extension))
 
     @classmethod
     def undo_extend_height(cls, extended_image: np.ndarray, shadow_angle: float) -> np.ndarray:
@@ -63,44 +107,14 @@ class PreprocessEquirectangularImage:
         Returns:
             np.ndarray: The image with the extended part removed.
         """
-        cls.logger.info("Attempting to remove extension based on shadow_angle=%.2f", shadow_angle)
-
-        if not isinstance(extended_image, np.ndarray):
-            cls.logger.error("Image is not a valid numpy array.")
-            raise TypeError("extended_image must be a numpy array.")
-
-        shadow_angle = abs(shadow_angle)
         fov_original = 180.0
-
-        ext_height, ext_width = extended_image.shape[:2]
         estimated_original_height = int(
-            round(ext_height / (1.0 + shadow_angle / fov_original))
+            round(extended_image.shape[0] / (1.0 + shadow_angle / fov_original))
         )
-        h_prime_est = ext_height - estimated_original_height
-
-        cls.logger.debug(
-            "Extended image height: %d, Estimated original height: %d, Estimated h_prime: %d",
-            ext_height, estimated_original_height, h_prime_est
-        )
-
-        if h_prime_est <= 0:
-            cls.logger.warning(
-                "Computed extension (%d) is <= 0. Possibly shadow_angle was never used to extend. "
-                "Returning the input image.", h_prime_est
-            )
-            return extended_image
-
-        restored_image = extended_image[:estimated_original_height, :, :]
-        cls.logger.info("Extended rows removed. New height: %d", restored_image.shape[0])
-        return restored_image
+        return extended_image[:estimated_original_height, :, :]
 
     @classmethod
-    def rotate(
-        cls,
-        image: np.ndarray,
-        delta_lat: float,
-        delta_lon: float
-    ) -> np.ndarray:
+    def rotate(cls, image: np.ndarray, delta_lat: float, delta_lon: float) -> np.ndarray:
         """
         Rotates an equirectangular image based on latitude (delta_lat) and longitude (delta_lon) shifts.
 
@@ -112,16 +126,7 @@ class PreprocessEquirectangularImage:
         Returns:
             np.ndarray: Rotated equirectangular image.
         """
-        cls.logger.info("Starting rotation with delta_lat=%.2f, delta_lon=%.2f", delta_lat, delta_lon)
-
-        if len(image.shape) == 2:
-            H, W = image.shape
-            C = 1
-            image = image[..., np.newaxis]
-        else:
-            H, W, C = image.shape
-        cls.logger.debug("Image dimensions: Height=%d, Width=%d, Channels=%d", H, W, C)
-
+        H, W = image.shape[:2]
         x = np.linspace(0, W - 1, W)
         y = np.linspace(0, H - 1, H)
         xv, yv = np.meshgrid(x, y)
@@ -138,73 +143,52 @@ class PreprocessEquirectangularImage:
         delta_lat_rad = np.radians(delta_lat)
         delta_lon_rad = np.radians(delta_lon)
 
-        # Rotate around the X-axis (latitude shift)
+        # Rotate around latitude axis
         x_rot = x_sphere
         y_rot = y_sphere * np.cos(delta_lat_rad) - z_sphere * np.sin(delta_lat_rad)
         z_rot = y_sphere * np.sin(delta_lat_rad) + z_sphere * np.cos(delta_lat_rad)
 
-        # Rotate around the Z-axis (longitude shift)
+        # Rotate around longitude axis
         x_final = x_rot * np.cos(delta_lon_rad) - y_rot * np.sin(delta_lon_rad)
         y_final = x_rot * np.sin(delta_lon_rad) + y_rot * np.cos(delta_lon_rad)
         z_final = z_rot
 
-        lon_final = np.arctan2(y_final, x_final)
-        lat_final = np.arcsin(z_final)
+        lon_final = np.degrees(np.arctan2(y_final, x_final))
+        lat_final = np.degrees(np.arcsin(z_final))
 
-        lon_final_deg = np.degrees(lon_final)
-        lat_final_deg = np.degrees(lat_final)
-
-        x_rot_map = ((lon_final_deg + 180.0) / 360.0) * (W - 1)
-        y_rot_map = ((90.0 - lat_final_deg) / 180.0) * (H - 1)
+        x_rot_map = ((lon_final + 180.0) / 360.0) * (W - 1)
+        y_rot_map = ((90.0 - lat_final) / 180.0) * (H - 1)
 
         map_x = x_rot_map.astype(np.float32)
         map_y = y_rot_map.astype(np.float32)
 
-        rotated_image = cv2.remap(
-            image,
-            map_x,
-            map_y,
-            interpolation=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_WRAP
-        )
-
-        cls.logger.info("Rotation complete.")
-        return rotated_image
+        return cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
 
     @classmethod
-    def preprocess(
-        cls,
-        image: np.ndarray,
-        shadow_angle: float = 0,
-        delta_lat: float = 0,
-        delta_lon: float = 0
-    ) -> np.ndarray:
+    def preprocess(cls, image: np.ndarray, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0, resize_factor: float = 1.0) -> np.ndarray:
         """
-        Preprocess an equirectangular image by optionally extending its height and then rotating it.
+        Preprocess an equirectangular image by extending its height, rotating, and resizing.
 
         Args:
             image (np.ndarray): Input equirectangular image.
-            shadow_angle (float, optional): Additional field of view in degrees to extend. Default is 0.
-            delta_lat (float, optional): Latitude rotation in degrees. Default is 0.
-            delta_lon (float, optional): Longitude rotation in degrees. Default is 0.
+            shadow_angle (float): Additional FOV to extend.
+            delta_lat (float): Latitude rotation.
+            delta_lon (float): Longitude rotation.
+            resize_factor (float): Resize factor for upsampling/downsampling.
 
         Returns:
-            np.ndarray: The preprocessed (extended + rotated) image.
+            np.ndarray: Preprocessed image.
         """
-        cls.logger.info(
-            "Starting preprocessing with parameters: shadow_angle=%.2f, delta_lat=%.2f, delta_lon=%.2f",
-            shadow_angle, delta_lat, delta_lon
-        )
-
-        # Step 1: Extend or undo extend height
         if shadow_angle >= 0:
             processed_image = cls.extend_height(image, shadow_angle)
         else:
             processed_image = cls.undo_extend_height(image, shadow_angle)
 
-        # Step 2: Rotate the image
         processed_image = cls.rotate(processed_image, delta_lat, delta_lon)
-        cls.logger.info("Preprocessing complete.")
+
+        if resize_factor != 1.0:
+            resizer = ImageResizer(resize_factor=resize_factor)
+            processed_image = resizer.resize_image(processed_image)
 
         return processed_image
 
@@ -217,8 +201,4 @@ class PreprocessEquirectangularImage:
             image (np.ndarray): Image to save.
             file_path (str): Output path.
         """
-        if not isinstance(image, np.ndarray):
-            cls.logger.error("Image is not a valid numpy array.")
-            raise TypeError("Image must be a numpy array.")
         cv2.imwrite(file_path, image)
-        cls.logger.info("Image saved to %s", file_path)

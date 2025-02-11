@@ -146,7 +146,7 @@ class PipelineData:
 
         return PipelineData.from_dict(new_data)
 
-    def preprocess(self, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0) -> None:
+    def preprocess(self, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0, resize_factor: float = 1) -> None:
         """
         Optionally preprocess each stored array by extending and/or rotating the equirectangular image.
 
@@ -161,7 +161,8 @@ class PipelineData:
                 v,
                 shadow_angle=shadow_angle,
                 delta_lat=delta_lat,
-                delta_lon=delta_lon
+                delta_lon=delta_lon,
+                resize_factor=resize_factor
             )
         self._cached_data = self.data.copy()
         self.data = new_data
