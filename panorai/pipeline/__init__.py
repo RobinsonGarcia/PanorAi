@@ -1,6 +1,6 @@
 # pipeline/__init__.py
 
-from .pipeline import ProjectionPipeline, PipelineConfig
+from .pipeline import ProjectionPipeline, PipelineConfig, Pipeline
 from .pipeline_data import PipelineData
 from .utils.resizer import ResizerConfig
 from .utils.preprocess_eq import PreprocessEquirectangularImage

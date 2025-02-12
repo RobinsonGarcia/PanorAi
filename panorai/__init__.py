@@ -1,6 +1,6 @@
 # panorai/__init__.py
 
-from .pipeline.pipeline import ProjectionPipeline, PipelineConfig
+from .pipeline.pipeline import ProjectionPipeline, PipelineConfig, Pipeline
 from .pipeline.pipeline_data import PipelineData
 from .pipeline.utils.resizer import ResizerConfig
 
@@ -19,4 +19,5 @@ __all__ = [
     "SamplerRegistry",
     # Projection
     "ProjectionRegistry",
+    "Pipeline"
 ]

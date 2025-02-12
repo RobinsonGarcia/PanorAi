@@ -15,6 +15,9 @@ from ..sampler.base_samplers import Sampler  # For type hints
 from ..submodules.projections import ProjectionRegistry
 from ..blender.registry import BlenderRegistry  # Importing BlenderRegistry
 
+# Pipeline dependencies
+from copy import deepcopy
+import cv2
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -541,3 +544,31 @@ Note: You can pass any updates to these configurations via kwargs.
             if isinstance(out, dict):
                 return out
             return {"stacked": out}
+
+
+class Pipeline(ProjectionPipeline):
+
+    @classmethod
+    def get_inference_results(cls, faces, model_fn):
+        new_faces = deepcopy(faces)
+        for k in new_faces['stacked'].keys():
+            assert new_faces['stacked'][k].shape[-1] == 3
+            new_faces['stacked'][k] = new_faces['stacked'][k].astype(np.float32)
+            depthmap = model_fn(new_faces['stacked'][k])
+            new_faces['stacked'][k][:, :, 0] = depthmap
+            new_faces['stacked'][k][:, :, 1] = depthmap
+            new_faces['stacked'][k][:, :, 2] = depthmap
+        return new_faces
+
+    def inference(self, data, model_fn, **kwargs):
+        faces = self.project(data, **kwargs)
+        infered_faces = Pipeline.get_inference_results(
+            faces,
+            model_fn=model_fn
+        )
+        equirect_inference_result = self.backward(infered_faces, 
+                                                  interpolation=cv2.INTER_NEAREST, 
+                                                  borderMode=cv2.BORDER_CONSTANT, 
+                                                  **kwargs
+                                                  )
+        return equirect_inference_result['stacked'][ :, :, 0]
