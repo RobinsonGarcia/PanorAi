@@ -419,7 +419,13 @@ Note: You can pass any updates to these configurations via kwargs.
         self._cached_images_masks = {'images': images, 'idxs': idxs, 'masks': masks, 'tangent_points': tangent_points}
 
         # Apply blending using the registered blender
-        combined = self.blender.blend(images, masks)
+        self.blender.update(**{
+            'projector': self.projector,
+            'tangent_points': tangent_points
+
+        })
+        
+        combined = self.blender.blend(images, masks,)
 
         if self._original_data is not None and self._keys_order is not None:
             new_data = self._original_data.unstack_new_instance(combined, self._keys_order)

@@ -42,7 +42,7 @@ class ImageResizer:
         Returns:
             np.ndarray: Resized image.
         """
-        resize_factor = self.resize_factor if upsample else 1 / self.resize_factor
+        resize_factor = self.resize_factor # if upsample else 1 / self.resize_factor
 
         if resize_factor != 1.0:
             new_shape = (int(img.shape[0] * resize_factor), int(img.shape[1] * resize_factor))
@@ -51,7 +51,9 @@ class ImageResizer:
                 return resize(
                     img, (*new_shape, img.shape[2]) if img.ndim == 3 else new_shape,
                     mode=self.mode,
-                    anti_aliasing=self.anti_aliasing
+                    anti_aliasing=self.anti_aliasing,
+                    preserve_range=True
+
                 )
             elif self.method == "cv2":
                 return cv2.resize(
@@ -165,7 +167,7 @@ class PreprocessEquirectangularImage:
         return cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
 
     @classmethod
-    def preprocess(cls, image: np.ndarray, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0, resize_factor: float = 1.0) -> np.ndarray:
+    def preprocess(cls, image: np.ndarray, shadow_angle: float = 0, delta_lat: float = 0, delta_lon: float = 0, resize_factor: float = 1.0, resize_method: str = 'skimage') -> np.ndarray:
         """
         Preprocess an equirectangular image by extending its height, rotating, and resizing.
 
@@ -175,6 +177,7 @@ class PreprocessEquirectangularImage:
             delta_lat (float): Latitude rotation.
             delta_lon (float): Longitude rotation.
             resize_factor (float): Resize factor for upsampling/downsampling.
+            resize_method (float): Resize method for upsampling/downsampling (skimage or cv2).
 
         Returns:
             np.ndarray: Preprocessed image.
@@ -187,7 +190,7 @@ class PreprocessEquirectangularImage:
         processed_image = cls.rotate(processed_image, delta_lat, delta_lon)
 
         if resize_factor != 1.0:
-            resizer = ImageResizer(resize_factor=resize_factor)
+            resizer = ImageResizer(resize_factor=resize_factor, method=resize_method)
             processed_image = resizer.resize_image(processed_image)
 
         return processed_image

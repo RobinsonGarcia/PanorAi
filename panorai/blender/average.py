@@ -1,11 +1,15 @@
 # panorai/pipeline/blender/feathering.py
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
 from .base_blenders import BaseBlender
 from typing import Any
 
-class FeatheringBlender(BaseBlender):
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+
+class AverageBlender(BaseBlender):
 
 
     def blend(self, images, masks, **kwargs):
@@ -22,17 +26,13 @@ class FeatheringBlender(BaseBlender):
         img_shape = images[0].shape
         combined = np.zeros(img_shape, dtype=np.float32)
         weight_map = np.zeros(img_shape[:2], dtype=np.float32)
-
+  
         for img, mask in zip(images, masks):
-            valid_mask = np.max(img > 0, axis=-1).astype(np.float32)
-
-            # Feather the mask using Euclidean distance transform
-            distance = distance_transform_edt(valid_mask)
-            feathered_mask = distance / distance.max()  # Normalize to [0, 1]
-
+            
+            equirect_mask = (np.mean(img,axis=-1) > 0 )
             # Apply blending
-            combined += img * feathered_mask[..., None]
-            weight_map += feathered_mask
+            combined += img 
+            weight_map += equirect_mask
 
         # Normalize the blended image
         valid_weights = weight_map > 0

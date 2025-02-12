@@ -2,6 +2,8 @@
 
 from .registry import BlenderRegistry
 from .feathering import FeatheringBlender
+from .gaussian import GaussianBlender
+from .average import AverageBlender
 import logging
 
 # Initialize logger for this module
@@ -10,6 +12,8 @@ logger = logging.getLogger('blender.default_blenders')
 # Default blenders
 DEFAULT_BLENDERS = {
     "FeatheringBlender": FeatheringBlender,
+    "GaussianBlender": GaussianBlender,
+    "AverageBlender": AverageBlender
 }
 
 def register_default_blenders():
